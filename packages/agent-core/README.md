@@ -1,6 +1,10 @@
 # Agent Core
 
-This package is the future home for reusable LangGraph workflows, prompts, model adapters, and tool integrations.
+This package now holds the shared backend runtime core:
 
-For now, the runnable prototype remains in `src/basic_langgraph_agent/` at the repository root. Task 1 only establishes the package boundary so later work can migrate logic here gradually.
+- Postgres-backed run storage and migrations
+- in-memory test store for API and worker tests
+- a LangGraph-backed demo workflow executor
+- worker-safe leasing and event persistence helpers
 
+The original runnable prototype still remains in `src/basic_langgraph_agent/` at the repository root.

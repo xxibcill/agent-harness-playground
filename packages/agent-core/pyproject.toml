@@ -1,0 +1,14 @@
+[project]
+name = "agent-harness-core"
+version = "0.1.0"
+description = "Shared runtime primitives and workflows for the agent harness platform."
+requires-python = ">=3.11"
+dependencies = [
+    "agent-harness-contracts",
+    "langgraph>=1.0.10,<2.0.0",
+    "psycopg[binary]>=3.2.0,<4.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

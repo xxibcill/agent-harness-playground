@@ -1,4 +1,17 @@
 # Worker
 
-This service is the future background execution plane for LangGraph workflows and runtime event emission.
+This service is the execution plane for queued agent runs.
 
+Current responsibilities:
+
+- claim queued runs with a lease so stale work can be recovered
+- execute LangGraph workflows asynchronously
+- persist workflow, node, tool, and model events
+- mark runs as completed, failed, or cancelled
+
+Environment:
+
+- `AGENT_HARNESS_DATABASE_URL`: Postgres connection string used for queue and runtime storage
+- `AGENT_HARNESS_WORKER_ID`: worker identity recorded on claimed runs
+- `AGENT_HARNESS_WORKER_POLL_SECONDS`: idle polling interval
+- `AGENT_HARNESS_WORKER_LEASE_SECONDS`: lease duration before stale runs can be reclaimed

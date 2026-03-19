@@ -1,0 +1,12 @@
+[project]
+name = "agent-harness-contracts"
+version = "0.1.0"
+description = "Shared runtime contracts for the agent harness platform."
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.11.0,<3.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

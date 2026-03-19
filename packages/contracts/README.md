@@ -1,11 +1,10 @@
 # Contracts
 
-This package boundary is reserved for shared contracts between backend services and the Next.js client.
+This package now contains the shared Python runtime contracts used by the API and worker:
 
-Planned contents:
+- run lifecycle states
+- run request and response models
+- structured runtime event models
+- token usage payloads
 
-- OpenAPI artifacts
-- generated TypeScript client types
-- JSON schemas for runtime events
-- shared payload examples for UI development
-
+It is still the right future home for generated OpenAPI artifacts, TypeScript clients, and JSON schema exports.

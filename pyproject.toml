@@ -20,8 +20,28 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = [
+    "agent-harness-api",
+    "agent-harness-worker",
+    "agent-harness-core",
+    "agent-harness-contracts",
+    "fastapi>=0.116.0,<1.0.0",
+    "httpx>=0.28.0,<1.0.0",
     "pytest>=8.4.0,<9.0.0",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.uv.workspace]
+members = [
+    "apps/api",
+    "apps/worker",
+    "packages/agent-core",
+    "packages/contracts",
+]
+
+[tool.uv.sources]
+agent-harness-api = { workspace = true }
+agent-harness-worker = { workspace = true }
+agent-harness-core = { workspace = true }
+agent-harness-contracts = { workspace = true }
