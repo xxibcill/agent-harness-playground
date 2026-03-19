@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -11,6 +13,14 @@ from anthropic import Anthropic
 from langgraph.graph import END, START, StateGraph
 from dotenv import load_dotenv
 from typing_extensions import TypedDict
+
+from basic_langgraph_agent.usage_tracker import (
+    append_usage_entry,
+    build_usage_entry,
+    calculate_average_tpm,
+    calculate_rolling_tpm,
+    read_usage_entries,
+)
 
 
 class AgentState(TypedDict):
@@ -119,6 +129,7 @@ def create_responder(config: AgentConfig) -> Callable[[str], str]:
     client = create_client(config)
 
     def responder(user_input: str) -> str:
+        started_at = time.perf_counter()
         try:
             response = client.messages.create(
                 model=config.model,
@@ -127,6 +138,33 @@ def create_responder(config: AgentConfig) -> Callable[[str], str]:
             )
         except anthropic.APIError as exc:
             raise RuntimeError(f"Anthropic request failed: {exc}") from exc
+
+        latency_ms = int((time.perf_counter() - started_at) * 1000)
+        usage_entry = build_usage_entry(
+            model=config.model,
+            base_url=config.base_url,
+            max_tokens=config.max_tokens,
+            latency_ms=latency_ms,
+            usage=response.usage,
+            request_id=getattr(response, "_request_id", None),
+        )
+        try:
+            append_usage_entry(usage_entry)
+        except OSError as exc:
+            print(f"Warning: failed to write token usage log: {exc}", file=sys.stderr)
+
+        try:
+            rolling_tpm = calculate_rolling_tpm(read_usage_entries())
+        except OSError as exc:
+            print(f"Warning: failed to read token usage log: {exc}", file=sys.stderr)
+            rolling_tpm = usage_entry.total_tokens
+
+        average_tpm = calculate_average_tpm(usage_entry)
+        print(f"input tokens: {usage_entry.input_tokens}")
+        print(f"output tokens: {usage_entry.output_tokens}")
+        print(f"total tokens: {usage_entry.total_tokens}")
+        print(f"average output TPM for this call: {average_tpm.output_tpm:.2f}")
+        print(f"rolling TPM over the last 60 seconds: {rolling_tpm}")
 
         return extract_text(response)
 

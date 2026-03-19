@@ -12,6 +12,7 @@ dependencies = [
 
 [project.scripts]
 basic-agent = "basic_langgraph_agent.agent:main"
+basic-agent-usage = "basic_langgraph_agent.usage_tracker:main"
 
 [build-system]
 requires = ["hatchling"]
