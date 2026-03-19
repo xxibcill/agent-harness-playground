@@ -1,0 +1,14 @@
+[project]
+name = "agent-harness-worker"
+version = "0.1.0"
+description = "Background worker placeholder for agent execution."
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+agent-harness-worker = "agent_harness_worker.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+

@@ -1,0 +1,11 @@
+{
+  "name": "agent-harness-playground",
+  "private": true,
+  "packageManager": "pnpm@10.6.3",
+  "scripts": {
+    "web:dev": "pnpm --dir apps/web dev",
+    "web:build": "pnpm --dir apps/web build",
+    "web:start": "pnpm --dir apps/web start"
+  }
+}
+

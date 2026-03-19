@@ -1,5 +1,12 @@
-.venv/
-.pytest_cache/
-__pycache__/
+.DS_Store
 .env
+.next
+.pytest_cache
+.venv
+__pycache__/
+*.pyc
+node_modules/
+dist/
+coverage/
 data/token_usage.jsonl
+

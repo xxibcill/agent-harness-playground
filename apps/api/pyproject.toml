@@ -1,0 +1,17 @@
+[project]
+name = "agent-harness-api"
+version = "0.1.0"
+description = "FastAPI control plane for agent harness runs."
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.116.0,<1.0.0",
+    "uvicorn>=0.35.0,<1.0.0",
+]
+
+[project.scripts]
+agent-harness-api = "agent_harness_api.main:run"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
