@@ -5,7 +5,9 @@ description = "Minimal LangGraph project for a first runnable agent."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "anthropic>=0.54.0,<1.0.0",
     "langgraph>=1.0.10,<2.0.0",
+    "python-dotenv>=1.1.1,<2.0.0",
 ]
 
 [project.scripts]

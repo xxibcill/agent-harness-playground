@@ -1,6 +1,6 @@
 # Basic LangGraph Agent
 
-This project starts with the smallest useful LangGraph setup: one state graph, one node, and one CLI command.
+This project starts with a minimal LangGraph agent: one state graph, one Anthropic-backed node, and one CLI command.
 
 ## Requirements
 
@@ -13,17 +13,23 @@ This project starts with the smallest useful LangGraph setup: one state graph, o
 uv sync
 ```
 
+## Environment
+
+The agent now loads `.env` automatically from the project root. Put your Anthropic-compatible endpoint settings there:
+
+```bash
+cp .env.example .env
+```
+
+`ANTHROPIC_MODEL` must be a model ID accepted by your endpoint.
+
 ## First run
 
 ```bash
-uv run basic-agent "Say hello to LangGraph"
+uv run basic-agent --model "your_provider_model" "Say hello to LangGraph"
 ```
 
-Expected output:
-
-```text
-Hello from LangGraph. You said: Say hello to LangGraph
-```
+If `.env` already includes `ANTHROPIC_MODEL`, you can omit `--model`.
 
 ## Run tests
 
@@ -31,6 +37,6 @@ Hello from LangGraph. You said: Say hello to LangGraph
 uv run pytest
 ```
 
-## Next step
+## Notes
 
-When you want a real LLM-backed agent, replace the `respond` node in `src/basic_langgraph_agent/agent.py` with a model call and keep the surrounding graph unchanged.
+The agent reads `ANTHROPIC_AUTH_TOKEN` first and falls back to `ANTHROPIC_API_KEY` if needed. Shell environment variables still win over `.env`, and `API_TIMEOUT_MS` is converted from milliseconds to seconds for the Anthropic Python SDK.
