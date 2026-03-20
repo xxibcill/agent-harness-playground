@@ -63,16 +63,20 @@ source = { editable = "packages/agent-core" }
 dependencies = [
     { name = "agent-harness-contracts" },
     { name = "agent-harness-observability" },
+    { name = "anthropic" },
     { name = "langgraph" },
     { name = "psycopg", extra = ["binary"] },
+    { name = "python-dotenv" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "agent-harness-contracts", editable = "packages/contracts" },
     { name = "agent-harness-observability", editable = "packages/observability" },
+    { name = "anthropic", specifier = ">=0.54.0,<1.0.0" },
     { name = "langgraph", specifier = ">=1.0.10,<2.0.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.0,<4.0.0" },
+    { name = "python-dotenv", specifier = ">=1.1.1,<2.0.0" },
 ]
 
 [[package]]
@@ -176,9 +180,7 @@ name = "basic-langgraph-agent"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "anthropic" },
-    { name = "langgraph" },
-    { name = "python-dotenv" },
+    { name = "agent-harness-core" },
 ]
 
 [package.dev-dependencies]
@@ -196,11 +198,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "anthropic", specifier = ">=0.54.0,<1.0.0" },
-    { name = "langgraph", specifier = ">=1.0.10,<2.0.0" },
-    { name = "python-dotenv", specifier = ">=1.1.1,<2.0.0" },
-]
+requires-dist = [{ name = "agent-harness-core", editable = "packages/agent-core" }]
 
 [package.metadata.requires-dev]
 dev = [

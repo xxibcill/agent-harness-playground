@@ -10,6 +10,13 @@ from agent_harness_contracts import CreateRunRequest, RunStatus
 from agent_harness_core import InMemoryRunStore, RuntimeExecutor
 from agent_harness_core.executor import ExecutionTimedOut
 from agent_harness_core.runtime import utc_now
+from agent_harness_core.workflows import (
+    AnthropicWorkflowConfig,
+    UnknownWorkflowError,
+    WorkflowRegistry,
+    create_anthropic_workflow,
+)
+from agent_harness_core.workflows.demo_echo import create_demo_echo_workflow
 from agent_harness_observability import build_observability
 from agent_harness_worker.main import WorkerConfig, run_once
 from fastapi.testclient import TestClient
@@ -145,6 +152,89 @@ def test_worker_executes_queued_runs_and_persists_runtime_events() -> None:
         "workflow.completed",
         "run.completed",
     ]
+
+
+def test_workflow_registry_raises_for_unknown_workflows() -> None:
+    registry = WorkflowRegistry({"demo.echo": create_demo_echo_workflow()})
+
+    with pytest.raises(UnknownWorkflowError, match="missing.workflow"):
+        registry.get("missing.workflow")
+
+
+def test_worker_executes_anthropic_workflow_from_registry(monkeypatch) -> None:
+    class FakeMessages:
+        def create(self, **_: object):
+            return type(
+                "Response",
+                (),
+                {
+                    "content": [
+                        type("Block", (), {"type": "text", "text": "Shared model reply"})()
+                    ],
+                    "usage": type(
+                        "Usage",
+                        (),
+                        {
+                            "input_tokens": 4,
+                            "output_tokens": 3,
+                            "cache_creation_input_tokens": 0,
+                            "cache_read_input_tokens": 0,
+                        },
+                    )(),
+                    "_request_id": "req_worker_1",
+                },
+            )()
+
+    class FakeClient:
+        messages = FakeMessages()
+
+    monkeypatch.setattr(
+        "agent_harness_core.workflows.anthropic.create_client",
+        lambda _: FakeClient(),
+    )
+    monkeypatch.setattr(
+        "agent_harness_core.workflows.anthropic.append_usage_entry",
+        lambda _entry: None,
+    )
+    monkeypatch.setattr(
+        "agent_harness_core.workflows.anthropic.read_usage_entries",
+        lambda: [],
+    )
+
+    store = InMemoryRunStore()
+    run = store.create_run(
+        CreateRunRequest(workflow="anthropic.respond", input="  hello    worker  ")
+    )
+    registry = WorkflowRegistry(
+        {
+            "demo.echo": create_demo_echo_workflow(),
+            "anthropic.respond": create_anthropic_workflow(
+                AnthropicWorkflowConfig(
+                    api_key="test-token",
+                    model="provider-model",
+                    base_url=None,
+                    timeout_seconds=30.0,
+                    max_tokens=128,
+                )
+            ),
+        }
+    )
+
+    did_work = run_once(
+        store,
+        RuntimeExecutor(store, workflow_registry=registry),
+        WorkerConfig(poll_interval_seconds=0.0, lease_seconds=30, worker_id="worker-test"),
+    )
+
+    assert did_work is True
+
+    completed = store.get_run(run.run_id)
+    assert completed is not None
+    assert completed.status == RunStatus.COMPLETED
+    assert completed.output == {
+        "response": "Shared model reply",
+        "normalized_input": "hello worker",
+    }
 
 
 def test_worker_turns_cancelling_runs_into_cancelled_runs() -> None:

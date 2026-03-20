@@ -13,17 +13,17 @@ from agent_harness_observability import (
     context_from_traceparent,
     start_span,
 )
-from langgraph.graph import END, START, StateGraph
 from opentelemetry.trace import SpanKind
-from typing_extensions import TypedDict
 
 from agent_harness_core.runtime import RunStore, parse_datetime, utc_now
-
-
-class WorkflowState(TypedDict):
-    user_input: str
-    normalized_input: str
-    response: str
+from agent_harness_core.workflows import (
+    WorkflowDefinition,
+    WorkflowRegistry,
+    WorkflowResponse,
+    WorkflowState,
+    build_default_workflow_registry,
+    compile_workflow_graph,
+)
 
 
 class ExecutionCancelled(RuntimeError):
@@ -35,9 +35,15 @@ class ExecutionTimedOut(TimeoutError):
 
 
 class RuntimeExecutor:
-    def __init__(self, store: RunStore, observability: ServiceObservability | None = None) -> None:
+    def __init__(
+        self,
+        store: RunStore,
+        observability: ServiceObservability | None = None,
+        workflow_registry: WorkflowRegistry | None = None,
+    ) -> None:
         self._store = store
         self._observability = observability or build_observability("agent-core")
+        self._workflow_registry = workflow_registry or build_default_workflow_registry()
 
     def execute(self, run: RunRecord) -> RunRecord:
         deadline = self._build_deadline(run)
@@ -105,30 +111,32 @@ class RuntimeExecutor:
                 return completed_run
 
     def _build_graph(self, run: RunRecord) -> Any:
-        graph = StateGraph(WorkflowState)
-        graph.add_node("normalize_input", cast(Any, self._normalize_input(run)))
-        graph.add_node("generate_response", cast(Any, self._generate_response(run)))
-        graph.add_edge(START, "normalize_input")
-        graph.add_edge("normalize_input", "generate_response")
-        graph.add_edge("generate_response", END)
-        return graph.compile()
+        workflow = self._workflow_registry.get(run.workflow)
+        return compile_workflow_graph(
+            cast(Any, self._normalize_input(run, workflow)),
+            cast(Any, self._generate_response(run, workflow)),
+        )
 
-    def _normalize_input(self, run: RunRecord) -> Callable[[WorkflowState], WorkflowState]:
+    def _normalize_input(
+        self, run: RunRecord, workflow: WorkflowDefinition
+    ) -> Callable[[WorkflowState], WorkflowState]:
         def node(state: WorkflowState) -> WorkflowState:
             return self._run_node(
                 run,
                 node_name="normalize_input",
-                body=lambda: self._normalize_input_value(run, state),
+                body=lambda: self._normalize_input_value(run, workflow, state),
             )
 
         return node
 
-    def _generate_response(self, run: RunRecord) -> Callable[[WorkflowState], WorkflowState]:
+    def _generate_response(
+        self, run: RunRecord, workflow: WorkflowDefinition
+    ) -> Callable[[WorkflowState], WorkflowState]:
         def node(state: WorkflowState) -> WorkflowState:
             return self._run_node(
                 run,
                 node_name="generate_response",
-                body=lambda: self._generate_response_value(run, state),
+                body=lambda: self._generate_response_value(run, workflow, state),
             )
 
         return node
@@ -187,12 +195,17 @@ class RuntimeExecutor:
                 duration_seconds=perf_counter() - started_at,
             )
 
-    def _normalize_input_value(self, run: RunRecord, state: WorkflowState) -> WorkflowState:
+    def _normalize_input_value(
+        self,
+        run: RunRecord,
+        workflow: WorkflowDefinition,
+        state: WorkflowState,
+    ) -> WorkflowState:
         deadline = self._build_deadline(run)
         self._assert_active(run.run_id, deadline)
         started_at = perf_counter()
         outcome = "ok"
-        tool_name = "normalize_whitespace"
+        tool_name = workflow.normalize_tool_name
         try:
             with start_span(
                 self._observability.tracer,
@@ -214,7 +227,7 @@ class RuntimeExecutor:
                     payload={},
                 )
                 self._assert_active(run.run_id, deadline)
-                normalized_input = " ".join(state["user_input"].strip().split())
+                normalized_input = workflow.normalize_input(state["user_input"])
                 self._assert_active(run.run_id, deadline)
                 self._store.append_event(
                     run.run_id,
@@ -240,12 +253,18 @@ class RuntimeExecutor:
                 duration_seconds=perf_counter() - started_at,
             )
 
-    def _generate_response_value(self, run: RunRecord, state: WorkflowState) -> WorkflowState:
+    def _generate_response_value(
+        self,
+        run: RunRecord,
+        workflow: WorkflowDefinition,
+        state: WorkflowState,
+    ) -> WorkflowState:
         deadline = self._build_deadline(run)
         self._assert_active(run.run_id, deadline)
         started_at = perf_counter()
         outcome = "ok"
-        model_name = "demo-echo-model"
+        model_name = workflow.model_name_hint or f"{run.workflow}-model"
+        workflow_result: WorkflowResponse | None = None
         usage: TokenUsage | None = None
         try:
             with start_span(
@@ -268,8 +287,12 @@ class RuntimeExecutor:
                     payload={"input": state["normalized_input"]},
                 )
                 self._assert_active(run.run_id, deadline)
-                response = f"Echo: {state['normalized_input']}"
-                usage = self._build_usage(state["normalized_input"], response)
+                workflow_result = workflow.generate_response(state["normalized_input"])
+                model_name = workflow_result.model_name
+                response = workflow_result.response
+                usage = workflow_result.usage or self._build_usage(
+                    state["normalized_input"], response
+                )
                 self._assert_active(run.run_id, deadline)
                 self._store.append_event(
                     run.run_id,
@@ -290,6 +313,8 @@ class RuntimeExecutor:
             outcome = "error"
             raise
         finally:
+            if workflow_result is not None:
+                model_name = workflow_result.model_name
             self._observability.metrics.record_model(
                 workflow=run.workflow,
                 node_name="generate_response",

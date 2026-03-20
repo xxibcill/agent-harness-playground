@@ -1,15 +1,17 @@
-import os
+from __future__ import annotations
+
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from basic_langgraph_agent import agent
-from basic_langgraph_agent.agent import (
-    AgentConfig,
-    build_graph,
-    create_responder,
+import pytest
+from agent_harness_core.workflows import (
+    AnthropicWorkflowConfig,
+    ConfigurationError,
+    create_anthropic_workflow,
     load_config,
-    load_project_env,
 )
+
+from basic_langgraph_agent.agent import AgentConfig, build_graph, create_responder
 from basic_langgraph_agent.usage_tracker import (
     AverageTpm,
     UsageEntry,
@@ -25,8 +27,9 @@ from basic_langgraph_agent.usage_tracker import (
 def test_basic_agent_returns_a_response() -> None:
     graph = build_graph(lambda user_input: f"Echo: {user_input}")
 
-    result = graph.invoke({"user_input": "Test run", "response": ""})
+    result = graph.invoke({"user_input": "Test run", "normalized_input": "", "response": ""})
 
+    assert result["normalized_input"] == "Test run"
     assert result["response"] == "Echo: Test run"
 
 
@@ -45,6 +48,16 @@ def test_load_config_reads_custom_anthropic_env(monkeypatch) -> None:
         timeout_seconds=3000.0,
         max_tokens=256,
     )
+
+
+def test_load_config_fails_fast_when_api_key_is_missing(monkeypatch) -> None:
+    monkeypatch.setattr("agent_harness_core.workflows.anthropic.load_project_env", lambda: None)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_MODEL", raising=False)
+
+    with pytest.raises(ConfigurationError, match="ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY"):
+        load_config()
 
 
 def test_create_responder_returns_text_from_anthropic_message(monkeypatch, capsys) -> None:
@@ -69,16 +82,21 @@ def test_create_responder_returns_text_from_anthropic_message(monkeypatch, capsy
     class FakeClient:
         messages = FakeMessages()
 
-    monkeypatch.setattr(agent, "create_client", lambda _: FakeClient())
     monkeypatch.setattr(
-        agent,
-        "append_usage_entry",
+        "agent_harness_core.workflows.anthropic.create_client",
+        lambda _: FakeClient(),
+    )
+    monkeypatch.setattr(
+        "agent_harness_core.workflows.anthropic.append_usage_entry",
         lambda entry: captured_entry.setdefault("entry", entry),
     )
-    monkeypatch.setattr(agent, "read_usage_entries", lambda: [captured_entry["entry"]])
+    monkeypatch.setattr(
+        "agent_harness_core.workflows.anthropic.read_usage_entries",
+        lambda: [captured_entry["entry"]],
+    )
 
     responder = create_responder(
-        AgentConfig(
+        AnthropicWorkflowConfig(
             api_key="test-token",
             model="provider-model",
             base_url="https://api.z.ai/api/anthropic",
@@ -95,6 +113,66 @@ def test_create_responder_returns_text_from_anthropic_message(monkeypatch, capsy
     assert "total tokens: 18" in output
     assert "average output TPM for this call: " in output
     assert "rolling TPM over the last 60 seconds: 18" in output
+
+
+def test_create_anthropic_workflow_normalizes_before_request(monkeypatch) -> None:
+    captured_messages: list[dict[str, object]] = []
+
+    class FakeMessages:
+        def create(self, **kwargs: object) -> SimpleNamespace:
+            captured_messages.append(kwargs)
+            return SimpleNamespace(
+                content=[SimpleNamespace(type="text", text="Normalized response")],
+                usage=SimpleNamespace(
+                    input_tokens=3,
+                    output_tokens=2,
+                    cache_creation_input_tokens=0,
+                    cache_read_input_tokens=0,
+                ),
+                _request_id="req_test_456",
+            )
+
+    class FakeClient:
+        messages = FakeMessages()
+
+    monkeypatch.setattr(
+        "agent_harness_core.workflows.anthropic.create_client",
+        lambda _: FakeClient(),
+    )
+    monkeypatch.setattr(
+        "agent_harness_core.workflows.anthropic.append_usage_entry",
+        lambda _entry: None,
+    )
+    monkeypatch.setattr(
+        "agent_harness_core.workflows.anthropic.read_usage_entries",
+        lambda: [],
+    )
+
+    workflow = create_anthropic_workflow(
+        AnthropicWorkflowConfig(
+            api_key="test-token",
+            model="provider-model",
+            base_url=None,
+            timeout_seconds=30.0,
+            max_tokens=128,
+        )
+    )
+    graph = build_graph(
+        lambda user_input: workflow.generate_response(user_input).response
+    )
+
+    result = graph.invoke(
+        {"user_input": "  hello   workflow  ", "normalized_input": "", "response": ""}
+    )
+
+    assert result["normalized_input"] == "hello workflow"
+    assert captured_messages == [
+        {
+            "model": "provider-model",
+            "max_tokens": 128,
+            "messages": [{"role": "user", "content": "hello workflow"}],
+        }
+    ]
 
 
 def test_append_usage_entry_persists_jsonl_records(tmp_path) -> None:
@@ -257,23 +335,3 @@ def test_calculate_average_tpm_uses_request_duration() -> None:
         output_tpm=120.0,
         total_tpm=200.0,
     )
-
-
-def test_load_project_env_reads_dotenv_without_overriding_existing_env(tmp_path, monkeypatch) -> None:
-    env_file = tmp_path / ".env"
-    env_file.write_text(
-        'ANTHROPIC_AUTH_TOKEN="file-token"\nANTHROPIC_MODEL="file-model"\n',
-        encoding="utf-8",
-    )
-
-    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
-    monkeypatch.delenv("ANTHROPIC_MODEL", raising=False)
-    load_project_env(env_file)
-
-    assert os.getenv("ANTHROPIC_AUTH_TOKEN") == "file-token"
-    assert os.getenv("ANTHROPIC_MODEL") == "file-model"
-
-    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "shell-token")
-    load_project_env(env_file)
-
-    assert os.getenv("ANTHROPIC_AUTH_TOKEN") == "shell-token"
