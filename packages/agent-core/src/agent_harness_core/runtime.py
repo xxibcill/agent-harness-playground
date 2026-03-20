@@ -13,10 +13,9 @@ from threading import Lock
 from typing import Any, Protocol, cast
 
 import psycopg
-from psycopg.rows import dict_row
-
 from agent_harness_contracts import CreateRunRequest, RunEvent, RunRecord, RunStatus, TokenUsage
 from agent_harness_observability import capture_current_trace
+from psycopg.rows import dict_row
 
 
 def utc_now() -> datetime:
@@ -59,7 +58,14 @@ class RunStore(Protocol):
 
     def claim_next_run(self, worker_id: str, lease_seconds: int) -> RunRecord | None: ...
 
-    def refresh_lease(self, run_id: str, worker_id: str, lease_seconds: int) -> RunRecord | None: ...
+    def refresh_lease(
+        self,
+        run_id: str,
+        worker_id: str,
+        lease_seconds: int,
+    ) -> RunRecord | None: ...
+
+    def requeue_run(self, run_id: str, error: str, scheduled_at: datetime) -> RunRecord: ...
 
     def list_events(self, run_id: str, after_sequence: int = 0) -> list[RunEvent]: ...
 
@@ -116,6 +122,8 @@ class InMemoryRunStore:
                 "completed_at": None,
                 "cancel_requested_at": None,
                 "attempt_count": 0,
+                "max_attempts": request.max_attempts,
+                "timeout_seconds": request.timeout_seconds,
                 "worker_id": None,
                 "lease_expires_at": None,
                 "event_sequence": 0,
@@ -210,6 +218,8 @@ class InMemoryRunStore:
                 ) <= now
                 if status not in {RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.CANCELLING}:
                     continue
+                if cast(int, run["attempt_count"]) >= cast(int, run["max_attempts"]):
+                    continue
                 if status in {RunStatus.RUNNING, RunStatus.CANCELLING} and not is_stale_running:
                     continue
                 run["status"] = (
@@ -240,6 +250,30 @@ class InMemoryRunStore:
             now = utc_now()
             run["lease_expires_at"] = now + timedelta(seconds=lease_seconds)
             run["updated_at"] = now
+            return self._build_run(run)
+
+    def requeue_run(self, run_id: str, error: str, scheduled_at: datetime) -> RunRecord:
+        with self._lock:
+            run = self._require_run(run_id)
+            now = utc_now()
+            run["status"] = RunStatus.QUEUED.value
+            run["error"] = error
+            run["scheduled_at"] = scheduled_at
+            run["updated_at"] = now
+            run["worker_id"] = None
+            run["lease_owner"] = None
+            run["lease_expires_at"] = None
+            self._append_event_locked(
+                run_id,
+                event_type="run.retry_scheduled",
+                category="run",
+                payload={
+                    "error": error,
+                    "scheduled_at": to_iso8601(scheduled_at),
+                    "attempt_count": run["attempt_count"],
+                    "max_attempts": run["max_attempts"],
+                },
+            )
             return self._build_run(run)
 
     def list_events(self, run_id: str, after_sequence: int = 0) -> list[RunEvent]:
@@ -379,6 +413,8 @@ class InMemoryRunStore:
             completed_at=to_iso8601(cast(datetime | None, run["completed_at"])),
             cancel_requested_at=to_iso8601(cast(datetime | None, run["cancel_requested_at"])),
             attempt_count=cast(int, run["attempt_count"]),
+            max_attempts=cast(int, run["max_attempts"]),
+            timeout_seconds=cast(int, run["timeout_seconds"]),
             worker_id=cast(str | None, run["worker_id"]),
             lease_expires_at=to_iso8601(cast(datetime | None, run["lease_expires_at"])),
             trace_id=cast(str | None, run["trace_id"]),
@@ -409,7 +445,11 @@ class PostgresRunStore:
 
     def apply_migrations(self) -> None:
         migration_dir = resources.files("agent_harness_core").joinpath("migrations")
-        for migration_path in sorted(cast(Iterable[Path], migration_dir.iterdir()), key=lambda item: item.name):
+        migration_paths = sorted(
+            cast(Iterable[Path], migration_dir.iterdir()),
+            key=lambda item: item.name,
+        )
+        for migration_path in migration_paths:
             self._apply_migration_file(migration_path)
 
     def create_run(self, request: CreateRunRequest) -> RunRecord:
@@ -426,10 +466,12 @@ class PostgresRunStore:
                     input_text,
                     metadata,
                     scheduled_at,
+                    max_attempts,
+                    timeout_seconds,
                     trace_id,
                     traceparent
                 )
-                values (%s, %s, %s, %s, %s::jsonb, %s, %s, %s)
+                values (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s)
                 returning *
                 """,
                 (
@@ -439,6 +481,8 @@ class PostgresRunStore:
                     request.input,
                     json.dumps(request.metadata),
                     scheduled_at,
+                    request.max_attempts,
+                    request.timeout_seconds,
                     trace.trace_id,
                     trace.traceparent,
                 ),
@@ -569,8 +613,12 @@ class PostgresRunStore:
                 select *
                 from runtime_runs
                 where (
-                    status = %s
-                    or (status in (%s, %s) and lease_expires_at <= now())
+                    (status = %s and attempt_count < max_attempts)
+                    or (
+                        status in (%s, %s)
+                        and lease_expires_at <= now()
+                        and attempt_count < max_attempts
+                    )
                 )
                   and scheduled_at <= now()
                 order by created_at asc
@@ -639,6 +687,43 @@ class PostgresRunStore:
                 ),
             ).fetchone()
         return None if row is None else self._build_run(dict(row))
+
+    def requeue_run(self, run_id: str, error: str, scheduled_at: datetime) -> RunRecord:
+        with self._connection() as connection, connection.transaction():
+            row = connection.execute(
+                """
+                update runtime_runs
+                set status = %s,
+                    error_text = %s,
+                    scheduled_at = %s,
+                    updated_at = now(),
+                    worker_id = null,
+                    lease_expires_at = null
+                where run_id = %s
+                returning *
+                """,
+                (
+                    RunStatus.QUEUED.value,
+                    error,
+                    scheduled_at,
+                    run_id,
+                ),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Run {run_id} does not exist.")
+            self._insert_event(
+                connection,
+                run_id,
+                event_type="run.retry_scheduled",
+                category="run",
+                payload={
+                    "error": error,
+                    "scheduled_at": to_iso8601(scheduled_at),
+                    "attempt_count": row["attempt_count"],
+                    "max_attempts": row["max_attempts"],
+                },
+            )
+            return self._build_run(dict(row))
 
     def list_events(self, run_id: str, after_sequence: int = 0) -> list[RunEvent]:
         with self._connection() as connection:
@@ -891,6 +976,8 @@ class PostgresRunStore:
             completed_at=to_iso8601(row["completed_at"]),
             cancel_requested_at=to_iso8601(row["cancel_requested_at"]),
             attempt_count=row["attempt_count"],
+            max_attempts=row["max_attempts"],
+            timeout_seconds=row["timeout_seconds"],
             worker_id=row["worker_id"],
             lease_expires_at=to_iso8601(row["lease_expires_at"]),
             trace_id=row["trace_id"],

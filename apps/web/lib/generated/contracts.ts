@@ -24,6 +24,8 @@ export interface CreateRunRequest {
   input: string;
   metadata: Record<string, unknown>;
   scheduled_at: string | null;
+  max_attempts: number;
+  timeout_seconds: number;
 }
 
 export interface RunRecord {
@@ -41,6 +43,8 @@ export interface RunRecord {
   completed_at: string | null;
   cancel_requested_at: string | null;
   attempt_count: number;
+  max_attempts: number;
+  timeout_seconds: number;
   worker_id: string | null;
   lease_expires_at: string | null;
   trace_id: string | null;

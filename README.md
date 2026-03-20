@@ -147,7 +147,25 @@ These commands support the new foundation that now exists in the repository.
 ```bash
 make install-python
 make install-web
+make lint
+make typecheck
+make test
+make ci
 make dev-api
 make dev-worker
 make dev-web
 ```
+
+## Hardening And Release
+
+Task 05 adds production-minded controls around the runtime:
+
+- API token authentication with `viewer`, `operator`, and `admin` roles
+- per-run timeout and retry policy persisted with runtime state
+- worker lease heartbeats and retry backoff handling
+- CI for lint, type checks, tests, and Postgres-backed migration safety
+
+Release and operations documentation:
+
+- `docs/deployment.md`
+- `docs/operations.md`

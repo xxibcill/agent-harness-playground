@@ -34,6 +34,8 @@ class CreateRunRequest(BaseModel):
     input: str = Field(min_length=1)
     metadata: dict[str, Any] = Field(default_factory=dict)
     scheduled_at: str | None = None
+    max_attempts: int = Field(default=3, ge=1, le=10)
+    timeout_seconds: int = Field(default=300, ge=5, le=3600)
 
 
 class RunRecord(BaseModel):
@@ -53,6 +55,8 @@ class RunRecord(BaseModel):
     completed_at: str | None = None
     cancel_requested_at: str | None = None
     attempt_count: int = 0
+    max_attempts: int = 3
+    timeout_seconds: int = 300
     worker_id: str | None = None
     lease_expires_at: str | None = None
     trace_id: str | None = None

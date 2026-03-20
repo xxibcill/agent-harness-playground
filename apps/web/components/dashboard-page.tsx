@@ -23,6 +23,8 @@ type LauncherState = {
   input: string;
   metadataText: string;
   scheduledAt: string;
+  maxAttempts: string;
+  timeoutSeconds: string;
 };
 
 const initialLauncherState: LauncherState = {
@@ -30,6 +32,8 @@ const initialLauncherState: LauncherState = {
   input: "",
   metadataText: defaultMetadata,
   scheduledAt: "",
+  maxAttempts: "3",
+  timeoutSeconds: "300",
 };
 
 export function DashboardPage() {
@@ -83,14 +87,24 @@ export function DashboardPage() {
     try {
       const metadata = parseMetadata(launcher.metadataText);
       const trimmedInput = launcher.input.trim();
+      const maxAttempts = Number(launcher.maxAttempts);
+      const timeoutSeconds = Number(launcher.timeoutSeconds);
       if (!trimmedInput) {
         throw new Error("Prompt is required.");
+      }
+      if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 10) {
+        throw new Error("Max attempts must be between 1 and 10.");
+      }
+      if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 5 || timeoutSeconds > 3600) {
+        throw new Error("Timeout must be between 5 and 3600 seconds.");
       }
       const request: CreateRunRequest = {
         workflow: launcher.workflow.trim() || "demo.echo",
         input: trimmedInput,
         metadata,
         scheduled_at: launcher.scheduledAt ? new Date(launcher.scheduledAt).toISOString() : null,
+        max_attempts: maxAttempts,
+        timeout_seconds: timeoutSeconds,
       };
       const createdRun = await createRun(request);
       setRuns((currentRuns) => [createdRun, ...currentRuns]);
@@ -171,6 +185,34 @@ export function DashboardPage() {
                   onChange={(event) =>
                     setLauncher((current) => ({ ...current, scheduledAt: event.target.value }))
                   }
+                />
+              </label>
+              <label className="field">
+                <span>Max attempts</span>
+                <input
+                  inputMode="numeric"
+                  min={1}
+                  max={10}
+                  onChange={(event) =>
+                    setLauncher((current) => ({ ...current, maxAttempts: event.target.value }))
+                  }
+                  type="number"
+                  value={launcher.maxAttempts}
+                />
+              </label>
+            </div>
+            <div className="field-row">
+              <label className="field">
+                <span>Timeout (seconds)</span>
+                <input
+                  inputMode="numeric"
+                  min={5}
+                  max={3600}
+                  onChange={(event) =>
+                    setLauncher((current) => ({ ...current, timeoutSeconds: event.target.value }))
+                  }
+                  type="number"
+                  value={launcher.timeoutSeconds}
                 />
               </label>
               <label className="field">

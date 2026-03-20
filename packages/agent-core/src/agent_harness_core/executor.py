@@ -1,14 +1,10 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from time import perf_counter
-from typing import Any, Callable
-
-from langgraph.graph import END, START, StateGraph
-from opentelemetry.trace import SpanKind
-from typing_extensions import TypedDict
+from typing import Any, Callable, cast
 
 from agent_harness_contracts import RunRecord, RunStatus, TokenUsage
-from agent_harness_core.runtime import RunStore
 from agent_harness_observability import (
     ServiceObservability,
     bind_log_context,
@@ -17,6 +13,11 @@ from agent_harness_observability import (
     context_from_traceparent,
     start_span,
 )
+from langgraph.graph import END, START, StateGraph
+from opentelemetry.trace import SpanKind
+from typing_extensions import TypedDict
+
+from agent_harness_core.runtime import RunStore, parse_datetime, utc_now
 
 
 class WorkflowState(TypedDict):
@@ -29,12 +30,17 @@ class ExecutionCancelled(RuntimeError):
     """Raised when a run should stop because cancellation was requested."""
 
 
+class ExecutionTimedOut(TimeoutError):
+    """Raised when a run exceeds its configured timeout."""
+
+
 class RuntimeExecutor:
     def __init__(self, store: RunStore, observability: ServiceObservability | None = None) -> None:
         self._store = store
         self._observability = observability or build_observability("agent-core")
 
     def execute(self, run: RunRecord) -> RunRecord:
+        deadline = self._build_deadline(run)
         parent_context = context_from_traceparent(run.traceparent)
         with start_span(
             self._observability.tracer,
@@ -56,7 +62,7 @@ class RuntimeExecutor:
                 )
 
             with bind_log_context(run_id=run.run_id, trace_id=trace_snapshot.trace_id):
-                self._assert_not_cancelled(run.run_id)
+                self._assert_active(run.run_id, deadline)
                 self._observability.metrics.record_run_started(run)
                 with start_span(
                     self._observability.tracer,
@@ -72,6 +78,7 @@ class RuntimeExecutor:
                         category="workflow",
                         payload={"workflow": run.workflow},
                     )
+                    self._assert_active(run.run_id, deadline)
                     graph = self._build_graph(run)
                     result = graph.invoke(
                         {
@@ -80,6 +87,7 @@ class RuntimeExecutor:
                             "response": "",
                         }
                     )
+                    self._assert_active(run.run_id, deadline)
                     self._store.append_event(
                         run.run_id,
                         event_type="workflow.completed",
@@ -98,8 +106,8 @@ class RuntimeExecutor:
 
     def _build_graph(self, run: RunRecord) -> Any:
         graph = StateGraph(WorkflowState)
-        graph.add_node("normalize_input", self._normalize_input(run))
-        graph.add_node("generate_response", self._generate_response(run))
+        graph.add_node("normalize_input", cast(Any, self._normalize_input(run)))
+        graph.add_node("generate_response", cast(Any, self._generate_response(run)))
         graph.add_edge(START, "normalize_input")
         graph.add_edge("normalize_input", "generate_response")
         graph.add_edge("generate_response", END)
@@ -132,7 +140,8 @@ class RuntimeExecutor:
         node_name: str,
         body: Callable[[], WorkflowState],
     ) -> WorkflowState:
-        self._assert_not_cancelled(run.run_id)
+        deadline = self._build_deadline(run)
+        self._assert_active(run.run_id, deadline)
         started_at = perf_counter()
         outcome = "ok"
         try:
@@ -152,7 +161,9 @@ class RuntimeExecutor:
                     node_name=node_name,
                     payload={},
                 )
+                self._assert_active(run.run_id, deadline)
                 next_state = body()
+                self._assert_active(run.run_id, deadline)
                 self._store.append_event(
                     run.run_id,
                     event_type="node.completed",
@@ -177,6 +188,8 @@ class RuntimeExecutor:
             )
 
     def _normalize_input_value(self, run: RunRecord, state: WorkflowState) -> WorkflowState:
+        deadline = self._build_deadline(run)
+        self._assert_active(run.run_id, deadline)
         started_at = perf_counter()
         outcome = "ok"
         tool_name = "normalize_whitespace"
@@ -200,7 +213,9 @@ class RuntimeExecutor:
                     tool_name=tool_name,
                     payload={},
                 )
+                self._assert_active(run.run_id, deadline)
                 normalized_input = " ".join(state["user_input"].strip().split())
+                self._assert_active(run.run_id, deadline)
                 self._store.append_event(
                     run.run_id,
                     event_type="tool.completed",
@@ -226,6 +241,8 @@ class RuntimeExecutor:
             )
 
     def _generate_response_value(self, run: RunRecord, state: WorkflowState) -> WorkflowState:
+        deadline = self._build_deadline(run)
+        self._assert_active(run.run_id, deadline)
         started_at = perf_counter()
         outcome = "ok"
         model_name = "demo-echo-model"
@@ -250,8 +267,10 @@ class RuntimeExecutor:
                     model_name=model_name,
                     payload={"input": state["normalized_input"]},
                 )
+                self._assert_active(run.run_id, deadline)
                 response = f"Echo: {state['normalized_input']}"
                 usage = self._build_usage(state["normalized_input"], response)
+                self._assert_active(run.run_id, deadline)
                 self._store.append_event(
                     run.run_id,
                     event_type="model.completed",
@@ -280,12 +299,24 @@ class RuntimeExecutor:
                 usage=usage,
             )
 
+    def _assert_active(self, run_id: str, deadline) -> None:  # type: ignore[no-untyped-def]
+        self._assert_not_cancelled(run_id)
+        self._assert_within_deadline(run_id, deadline)
+
     def _assert_not_cancelled(self, run_id: str) -> None:
         current = self._store.get_run(run_id)
         if current is None:
             raise RuntimeError(f"Run {run_id} no longer exists.")
         if current.status == RunStatus.CANCELLING:
             raise ExecutionCancelled("Cancellation requested while run was executing.")
+
+    def _assert_within_deadline(self, run_id: str, deadline) -> None:  # type: ignore[no-untyped-def]
+        if utc_now() > deadline:
+            raise ExecutionTimedOut(f"Run {run_id} exceeded its timeout budget.")
+
+    def _build_deadline(self, run: RunRecord):
+        started_at = parse_datetime(run.started_at) or utc_now()
+        return started_at + timedelta(seconds=run.timeout_seconds)
 
     def _build_usage(self, user_input: str, response: str) -> TokenUsage:
         input_tokens = len(user_input.split())

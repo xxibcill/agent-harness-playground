@@ -8,9 +8,20 @@ import type {
 } from "./generated/contracts";
 
 const DEFAULT_API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
+const DEFAULT_API_TOKEN = process.env.NEXT_PUBLIC_API_TOKEN ?? "";
 
 function apiBaseUrl(): string {
   return DEFAULT_API_BASE_URL.replace(/\/$/, "");
+}
+
+function apiToken(): string | null {
+  const token = DEFAULT_API_TOKEN.trim();
+  return token ? token : null;
+}
+
+function buildAuthHeaders(): HeadersInit {
+  const token = apiToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 async function readErrorMessage(response: Response): Promise<string> {
@@ -32,6 +43,7 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
     headers: {
       Accept: "application/json",
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      ...buildAuthHeaders(),
       ...init?.headers,
     },
   });
@@ -73,6 +85,10 @@ export function buildRunEventsStreamUrl(runId: string, sinceSequence = 0, follow
     follow: String(follow),
     since_sequence: String(sinceSequence),
   });
+  const token = apiToken();
+  if (token) {
+    searchParams.set("api_token", token);
+  }
 
   return `${apiBaseUrl()}/runs/${runId}/events/stream?${searchParams.toString()}`;
 }
@@ -101,6 +117,7 @@ export async function fetchRunEvents(runId: string): Promise<RunEvent[]> {
     cache: "no-store",
     headers: {
       Accept: "text/event-stream",
+      ...buildAuthHeaders(),
     },
   });
 

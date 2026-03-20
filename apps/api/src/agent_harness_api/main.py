@@ -4,13 +4,9 @@ import asyncio
 import json
 import logging
 import os
-from time import perf_counter
-from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
-
-from fastapi import Depends, FastAPI, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from contextlib import asynccontextmanager
+from time import perf_counter
 
 from agent_harness_contracts import (
     CancelRunResponse,
@@ -28,17 +24,22 @@ from agent_harness_observability import (
     capture_current_trace,
     start_span,
 )
+from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, StreamingResponse
+
+from agent_harness_api.auth import RequestAuthorizer, build_authorizer_from_env
 
 
 def build_logger() -> logging.Logger:
+    log_format = (
+        "%(asctime)s %(levelname)s %(name)s "
+        "run_id=%(run_id)s trace_id=%(trace_id)s %(message)s"
+    )
     logger = logging.getLogger("agent_harness_api")
     if not logger.handlers:
         handler = logging.StreamHandler()
-        handler.setFormatter(
-            logging.Formatter(
-                "%(asctime)s %(levelname)s %(name)s run_id=%(run_id)s trace_id=%(trace_id)s %(message)s"
-            )
-        )
+        handler.setFormatter(logging.Formatter(log_format))
         handler.addFilter(CorrelationFilter())
         logger.addHandler(handler)
     logger.setLevel(logging.INFO)
@@ -57,9 +58,11 @@ def build_cors_origins() -> list[str]:
 def create_app(
     store: RunStore | None = None,
     observability: ServiceObservability | None = None,
+    authorizer: RequestAuthorizer | None = None,
 ) -> FastAPI:
     runtime_store = store or build_run_store()
     telemetry = observability or build_observability("agent-harness-api")
+    request_authorizer = authorizer or build_authorizer_from_env()
     logger = build_logger()
 
     @asynccontextmanager
@@ -85,6 +88,7 @@ def create_app(
     )
     app.state.run_store = runtime_store
     app.state.observability = telemetry
+    app.state.authorizer = request_authorizer
     app.mount("/metrics", telemetry.metrics_app())
 
     def get_store() -> RunStore:
@@ -104,6 +108,16 @@ def create_app(
         ):
             trace_snapshot = capture_current_trace()
             with bind_log_context(trace_id=trace_snapshot.trace_id):
+                try:
+                    app.state.authorizer.authorize(request)
+                except HTTPException as exc:
+                    telemetry.metrics.record_http_request(
+                        method=request.method,
+                        route=route,
+                        status_code=exc.status_code,
+                        duration_seconds=perf_counter() - started_at,
+                    )
+                    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
                 response = await call_next(request)
                 telemetry.metrics.record_http_request(
                     method=request.method,

@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - "codex/**"
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: agent_harness_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d agent_harness_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      AGENT_HARNESS_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/agent_harness_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.6.3
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Install Python dependencies
+        run: uv sync --frozen
+
+      - name: Install web dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint Python
+        run: >-
+          uv run ruff check
+          apps/api/src
+          apps/worker/src
+          packages/agent-core/src
+          packages/contracts/src
+          packages/contracts/scripts
+          tests/test_backend_runtime.py
+          tests/test_postgres_migrations.py
+
+      - name: Typecheck Python
+        run: uv run mypy
+
+      - name: Typecheck web
+        run: pnpm --dir apps/web exec tsc --noEmit
+
+      - name: Run tests
+        run: uv run pytest

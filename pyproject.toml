@@ -27,11 +27,36 @@ dev = [
     "agent-harness-observability",
     "fastapi>=0.116.0,<1.0.0",
     "httpx>=0.28.0,<1.0.0",
+    "mypy>=1.18.0,<2.0.0",
     "pytest>=8.4.0,<9.0.0",
+    "ruff>=0.13.0,<1.0.0",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
+ignore = ["B008"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_configs = true
+ignore_missing_imports = true
+check_untyped_defs = true
+files = [
+    "apps/api/src",
+    "apps/worker/src",
+    "packages/agent-core/src",
+    "packages/contracts/src",
+    "packages/observability/src",
+    "tests/test_backend_runtime.py",
+    "tests/test_postgres_migrations.py",
+]
 
 [tool.uv.workspace]
 members = [

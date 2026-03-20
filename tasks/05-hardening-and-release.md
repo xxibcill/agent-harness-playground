@@ -1,5 +1,7 @@
 # 05 Hardening And Release
 
+Status: Done
+
 ## Goal
 
 Make the platform reliable enough for long-running development and real usage.

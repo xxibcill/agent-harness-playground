@@ -253,6 +253,14 @@ export function RunDetailsPage({ runId }: { runId: string }) {
               <dd>{run?.worker_id ?? "Unassigned"}</dd>
             </div>
             <div>
+              <dt>Retry policy</dt>
+              <dd>{run ? `${run.attempt_count}/${run.max_attempts} attempts used` : "Unavailable"}</dd>
+            </div>
+            <div>
+              <dt>Timeout budget</dt>
+              <dd>{run ? `${run.timeout_seconds}s` : "Unavailable"}</dd>
+            </div>
+            <div>
               <dt>Trace ID</dt>
               <dd>{run?.trace_id ?? "Unavailable"}</dd>
             </div>

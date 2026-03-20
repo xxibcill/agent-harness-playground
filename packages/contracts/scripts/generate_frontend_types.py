@@ -5,8 +5,6 @@ from pathlib import Path
 from types import NoneType
 from typing import Any, get_args, get_origin
 
-from pydantic import BaseModel
-
 from agent_harness_contracts import (
     CancelRunResponse,
     CreateRunRequest,
@@ -17,7 +15,7 @@ from agent_harness_contracts import (
     RunStatus,
     TokenUsage,
 )
-
+from pydantic import BaseModel
 
 OUTPUT_PATH = (
     Path(__file__).resolve().parents[3] / "apps" / "web" / "lib" / "generated" / "contracts.ts"

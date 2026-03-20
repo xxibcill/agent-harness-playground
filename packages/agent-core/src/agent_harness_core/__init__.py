@@ -1,4 +1,4 @@
-from agent_harness_core.executor import ExecutionCancelled, RuntimeExecutor
+from agent_harness_core.executor import ExecutionCancelled, ExecutionTimedOut, RuntimeExecutor
 from agent_harness_core.runtime import (
     InMemoryRunStore,
     PostgresRunStore,
@@ -9,6 +9,7 @@ from agent_harness_core.runtime import (
 
 __all__ = [
     "ExecutionCancelled",
+    "ExecutionTimedOut",
     "InMemoryRunStore",
     "PostgresRunStore",
     "RunStore",
