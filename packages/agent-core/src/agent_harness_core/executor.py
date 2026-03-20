@@ -111,7 +111,7 @@ class RuntimeExecutor:
                 return completed_run
 
     def _build_graph(self, run: RunRecord) -> Any:
-        workflow = self._workflow_registry.get(run.workflow)
+        workflow = self._workflow_registry.get(run.workflow, run)
         return compile_workflow_graph(
             cast(Any, self._normalize_input(run, workflow)),
             cast(Any, self._generate_response(run, workflow)),

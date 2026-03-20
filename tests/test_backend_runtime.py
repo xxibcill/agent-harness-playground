@@ -6,15 +6,20 @@ from datetime import timedelta
 import pytest
 from agent_harness_api.auth import Role, TokenAuthorizer
 from agent_harness_api.main import create_app
-from agent_harness_contracts import CreateRunRequest, RunStatus
+from agent_harness_contracts import (
+    CreateRunRequest,
+    RunStatus,
+    WorkflowConfig,
+    WorkflowProvider,
+    WorkflowRuntimeOverrides,
+)
 from agent_harness_core import InMemoryRunStore, RuntimeExecutor
 from agent_harness_core.executor import ExecutionTimedOut
 from agent_harness_core.runtime import utc_now
 from agent_harness_core.workflows import (
-    AnthropicWorkflowConfig,
     UnknownWorkflowError,
     WorkflowRegistry,
-    create_anthropic_workflow,
+    build_anthropic_workflow,
 )
 from agent_harness_core.workflows.demo_echo import create_demo_echo_workflow
 from agent_harness_observability import build_observability
@@ -33,6 +38,15 @@ def test_api_creates_lists_gets_and_streams_run_events() -> None:
             "workflow": "demo.echo",
             "input": "Hello runtime",
             "metadata": {"origin": "test"},
+            "workflow_config": {
+                "provider": "anthropic",
+                "model": "provider-model",
+                "max_tokens": 256,
+                "runtime_overrides": {
+                    "base_url": "https://example.invalid/anthropic",
+                    "client_timeout_seconds": 45,
+                },
+            },
         },
     )
 
@@ -47,6 +61,15 @@ def test_api_creates_lists_gets_and_streams_run_events() -> None:
     get_response = client.get(f"/runs/{run['run_id']}")
     assert get_response.status_code == 200
     assert get_response.json()["run"]["metadata"] == {"origin": "test"}
+    assert get_response.json()["run"]["workflow_config"] == {
+        "provider": "anthropic",
+        "model": "provider-model",
+        "max_tokens": 256,
+        "runtime_overrides": {
+            "base_url": "https://example.invalid/anthropic",
+            "client_timeout_seconds": 45,
+        },
+    }
 
     stream_response = client.get(
         f"/runs/{run['run_id']}/events/stream",
@@ -115,6 +138,46 @@ def test_trace_context_propagates_from_api_to_worker_events() -> None:
         worker_observability.shutdown()
 
 
+def test_api_defaults_workflow_config_for_backwards_compatible_requests() -> None:
+    store = InMemoryRunStore()
+    client = TestClient(create_app(store=store))
+
+    response = client.post(
+        "/runs",
+        json={
+            "workflow": "demo.echo",
+            "input": "backwards compatible",
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json()["run"]["workflow_config"] == {
+        "provider": None,
+        "model": None,
+        "max_tokens": None,
+        "runtime_overrides": None,
+    }
+
+
+def test_api_rejects_invalid_workflow_config_payloads() -> None:
+    store = InMemoryRunStore()
+    client = TestClient(create_app(store=store))
+
+    response = client.post(
+        "/runs",
+        json={
+            "workflow": "anthropic.respond",
+            "input": "invalid config",
+            "workflow_config": {
+                "provider": "anthropic",
+                "max_tokens": 0,
+            },
+        },
+    )
+
+    assert response.status_code == 422
+
+
 def test_worker_executes_queued_runs_and_persists_runtime_events() -> None:
     store = InMemoryRunStore()
     run = store.create_run(CreateRunRequest(input="  hello    worker  "))
@@ -162,8 +225,12 @@ def test_workflow_registry_raises_for_unknown_workflows() -> None:
 
 
 def test_worker_executes_anthropic_workflow_from_registry(monkeypatch) -> None:
+    captured_client_config: dict[str, object] = {}
+    captured_request: dict[str, object] = {}
+
     class FakeMessages:
-        def create(self, **_: object):
+        def create(self, **kwargs: object):
+            captured_request.update(kwargs)
             return type(
                 "Response",
                 (),
@@ -186,11 +253,20 @@ def test_worker_executes_anthropic_workflow_from_registry(monkeypatch) -> None:
             )()
 
     class FakeClient:
-        messages = FakeMessages()
+        def __init__(self, config) -> None:
+            captured_client_config.update(
+                {
+                    "model": config.model,
+                    "base_url": config.base_url,
+                    "timeout_seconds": config.timeout_seconds,
+                    "max_tokens": config.max_tokens,
+                }
+            )
+            self.messages = FakeMessages()
 
     monkeypatch.setattr(
         "agent_harness_core.workflows.anthropic.create_client",
-        lambda _: FakeClient(),
+        lambda config: FakeClient(config),
     )
     monkeypatch.setattr(
         "agent_harness_core.workflows.anthropic.append_usage_entry",
@@ -203,22 +279,32 @@ def test_worker_executes_anthropic_workflow_from_registry(monkeypatch) -> None:
 
     store = InMemoryRunStore()
     run = store.create_run(
-        CreateRunRequest(workflow="anthropic.respond", input="  hello    worker  ")
+        CreateRunRequest(
+            workflow="anthropic.respond",
+            input="  hello    worker  ",
+            workflow_config=WorkflowConfig(
+                provider=WorkflowProvider.ANTHROPIC,
+                model="run-selected-model",
+                max_tokens=321,
+                runtime_overrides=WorkflowRuntimeOverrides(
+                    base_url="https://example.invalid/anthropic",
+                    client_timeout_seconds=12,
+                ),
+            ),
+        )
     )
     registry = WorkflowRegistry(
         {
             "demo.echo": create_demo_echo_workflow(),
-            "anthropic.respond": create_anthropic_workflow(
-                AnthropicWorkflowConfig(
-                    api_key="test-token",
-                    model="provider-model",
-                    base_url=None,
-                    timeout_seconds=30.0,
-                    max_tokens=128,
-                )
-            ),
+            "anthropic.respond": build_anthropic_workflow,
         }
     )
+
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "test-token")
+    monkeypatch.setenv("ANTHROPIC_MODEL", "env-model")
+    monkeypatch.setenv("ANTHROPIC_MAX_TOKENS", "128")
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    monkeypatch.setenv("API_TIMEOUT_MS", "30000")
 
     did_work = run_once(
         store,
@@ -234,6 +320,17 @@ def test_worker_executes_anthropic_workflow_from_registry(monkeypatch) -> None:
     assert completed.output == {
         "response": "Shared model reply",
         "normalized_input": "hello worker",
+    }
+    assert captured_client_config == {
+        "model": "run-selected-model",
+        "base_url": "https://example.invalid/anthropic",
+        "timeout_seconds": 12.0,
+        "max_tokens": 321,
+    }
+    assert captured_request == {
+        "model": "run-selected-model",
+        "max_tokens": 321,
+        "messages": [{"role": "user", "content": "hello worker"}],
     }
 
 

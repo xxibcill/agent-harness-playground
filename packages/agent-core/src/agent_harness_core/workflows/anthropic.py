@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import anthropic
-from agent_harness_contracts import TokenUsage
+from agent_harness_contracts import RunRecord, TokenUsage, WorkflowConfig
 from anthropic import Anthropic
 from dotenv import load_dotenv
 
@@ -44,8 +44,17 @@ def load_project_env(env_file: Path = DEFAULT_ENV_FILE) -> None:
         load_dotenv(env_file, override=False)
 
 
-def load_config(model_override: str | None = None) -> AnthropicWorkflowConfig:
+def load_config(
+    workflow_config: WorkflowConfig | str | None = None,
+    *,
+    model_override: str | None = None,
+) -> AnthropicWorkflowConfig:
     load_project_env()
+    resolved_workflow_config = WorkflowConfig()
+    if isinstance(workflow_config, str):
+        model_override = workflow_config
+    elif workflow_config is not None:
+        resolved_workflow_config = workflow_config
 
     api_key = os.getenv("ANTHROPIC_AUTH_TOKEN") or os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
@@ -53,7 +62,7 @@ def load_config(model_override: str | None = None) -> AnthropicWorkflowConfig:
             "Set ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY before running the agent."
         )
 
-    model = model_override or os.getenv("ANTHROPIC_MODEL")
+    model = model_override or resolved_workflow_config.model or os.getenv("ANTHROPIC_MODEL")
     if not model:
         raise ConfigurationError(
             "Pass --model or set ANTHROPIC_MODEL to a model ID supported by your "
@@ -68,17 +77,25 @@ def load_config(model_override: str | None = None) -> AnthropicWorkflowConfig:
             "API_TIMEOUT_MS must be an integer number of milliseconds."
         ) from exc
 
-    max_tokens_text = os.getenv("ANTHROPIC_MAX_TOKENS", "512")
-    try:
-        max_tokens = int(max_tokens_text)
-    except ValueError as exc:
-        raise ConfigurationError("ANTHROPIC_MAX_TOKENS must be an integer.") from exc
+    max_tokens = resolved_workflow_config.max_tokens
+    if max_tokens is None:
+        max_tokens_text = os.getenv("ANTHROPIC_MAX_TOKENS", "512")
+        try:
+            max_tokens = int(max_tokens_text)
+        except ValueError as exc:
+            raise ConfigurationError("ANTHROPIC_MAX_TOKENS must be an integer.") from exc
+
+    base_url_override = None
+    client_timeout_override = None
+    if resolved_workflow_config.runtime_overrides is not None:
+        base_url_override = resolved_workflow_config.runtime_overrides.base_url
+        client_timeout_override = resolved_workflow_config.runtime_overrides.client_timeout_seconds
 
     return AnthropicWorkflowConfig(
         api_key=api_key,
         model=model,
-        base_url=os.getenv("ANTHROPIC_BASE_URL"),
-        timeout_seconds=timeout_seconds,
+        base_url=base_url_override or os.getenv("ANTHROPIC_BASE_URL"),
+        timeout_seconds=float(client_timeout_override or timeout_seconds),
         max_tokens=max_tokens,
     )
 
@@ -161,5 +178,14 @@ def create_anthropic_workflow(config: AnthropicWorkflowConfig) -> WorkflowDefini
     )
 
 
-def build_anthropic_workflow(model_override: str | None = None) -> WorkflowDefinition:
-    return create_anthropic_workflow(load_config(model_override))
+def build_anthropic_workflow(
+    run: RunRecord | None = None,
+    *,
+    model_override: str | None = None,
+) -> WorkflowDefinition:
+    workflow_config = WorkflowConfig()
+    if run is not None:
+        workflow_config = run.workflow_config
+    return create_anthropic_workflow(
+        load_config(workflow_config, model_override=model_override)
+    )

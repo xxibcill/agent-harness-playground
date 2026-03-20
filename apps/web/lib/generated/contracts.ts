@@ -13,16 +13,35 @@ export const runStatusValues = [
 
 export type RunStatus = (typeof runStatusValues)[number];
 
+export const workflowProviderValues = [
+  "anthropic",
+] as const;
+
+export type WorkflowProvider = (typeof workflowProviderValues)[number];
+
 export interface TokenUsage {
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
 }
 
+export interface WorkflowRuntimeOverrides {
+  base_url: string | null;
+  client_timeout_seconds: number | null;
+}
+
+export interface WorkflowConfig {
+  provider: WorkflowProvider | null;
+  model: string | null;
+  max_tokens: number | null;
+  runtime_overrides: WorkflowRuntimeOverrides | null;
+}
+
 export interface CreateRunRequest {
   workflow: string;
   input: string;
   metadata: Record<string, unknown>;
+  workflow_config: WorkflowConfig;
   scheduled_at: string | null;
   max_attempts: number;
   timeout_seconds: number;
@@ -34,6 +53,7 @@ export interface RunRecord {
   status: RunStatus;
   input: string;
   metadata: Record<string, unknown>;
+  workflow_config: WorkflowConfig;
   output: Record<string, unknown> | null;
   error: string | null;
   scheduled_at: string;

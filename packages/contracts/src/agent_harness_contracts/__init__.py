@@ -7,6 +7,9 @@ from agent_harness_contracts.models import (
     RunRecord,
     RunStatus,
     TokenUsage,
+    WorkflowConfig,
+    WorkflowProvider,
+    WorkflowRuntimeOverrides,
 )
 
 __all__ = [
@@ -18,4 +21,7 @@ __all__ = [
     "RunRecord",
     "RunStatus",
     "TokenUsage",
+    "WorkflowConfig",
+    "WorkflowProvider",
+    "WorkflowRuntimeOverrides",
 ]

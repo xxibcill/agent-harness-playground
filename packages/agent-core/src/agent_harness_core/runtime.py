@@ -13,7 +13,14 @@ from threading import Lock
 from typing import Any, Protocol, cast
 
 import psycopg
-from agent_harness_contracts import CreateRunRequest, RunEvent, RunRecord, RunStatus, TokenUsage
+from agent_harness_contracts import (
+    CreateRunRequest,
+    RunEvent,
+    RunRecord,
+    RunStatus,
+    TokenUsage,
+    WorkflowConfig,
+)
 from agent_harness_observability import capture_current_trace
 from psycopg.rows import dict_row
 
@@ -32,6 +39,14 @@ def parse_datetime(value: str | None) -> datetime | None:
     if value is None:
         return None
     return datetime.fromisoformat(value)
+
+
+def dump_workflow_config(config: WorkflowConfig) -> dict[str, Any]:
+    return config.model_dump(mode="json", exclude_none=True)
+
+
+def load_workflow_config(payload: Any) -> WorkflowConfig:
+    return WorkflowConfig.model_validate(payload or {})
 
 
 @dataclass(frozen=True)
@@ -113,6 +128,7 @@ class InMemoryRunStore:
                 "status": RunStatus.QUEUED.value,
                 "input": request.input,
                 "metadata": dict(request.metadata),
+                "workflow_config": dump_workflow_config(request.workflow_config),
                 "output": None,
                 "error": None,
                 "scheduled_at": scheduled_at,
@@ -404,6 +420,7 @@ class InMemoryRunStore:
             status=RunStatus(cast(str, run["status"])),
             input=cast(str, run["input"]),
             metadata=cast(dict[str, Any], run["metadata"]),
+            workflow_config=load_workflow_config(run.get("workflow_config")),
             output=cast(dict[str, Any] | None, run["output"]),
             error=cast(str | None, run["error"]),
             scheduled_at=to_iso8601(cast(datetime, run["scheduled_at"])) or "",
@@ -465,13 +482,14 @@ class PostgresRunStore:
                     status,
                     input_text,
                     metadata,
+                    workflow_config,
                     scheduled_at,
                     max_attempts,
                     timeout_seconds,
                     trace_id,
                     traceparent
                 )
-                values (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s)
+                values (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s)
                 returning *
                 """,
                 (
@@ -480,6 +498,7 @@ class PostgresRunStore:
                     RunStatus.QUEUED.value,
                     request.input,
                     json.dumps(request.metadata),
+                    json.dumps(dump_workflow_config(request.workflow_config)),
                     scheduled_at,
                     request.max_attempts,
                     request.timeout_seconds,
@@ -967,6 +986,7 @@ class PostgresRunStore:
             status=RunStatus(row["status"]),
             input=row["input_text"],
             metadata=row["metadata"] or {},
+            workflow_config=load_workflow_config(row.get("workflow_config")),
             output=row["output_payload"],
             error=row["error_text"],
             scheduled_at=to_iso8601(row["scheduled_at"]) or "",

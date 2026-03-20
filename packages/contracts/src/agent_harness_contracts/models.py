@@ -29,10 +29,31 @@ class TokenUsage(BaseModel):
     total_tokens: int = 0
 
 
+class WorkflowProvider(StrEnum):
+    ANTHROPIC = "anthropic"
+
+
+class WorkflowRuntimeOverrides(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    base_url: str | None = None
+    client_timeout_seconds: int | None = Field(default=None, ge=1, le=3600)
+
+
+class WorkflowConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", use_enum_values=True)
+
+    provider: WorkflowProvider | None = None
+    model: str | None = Field(default=None, min_length=1)
+    max_tokens: int | None = Field(default=None, ge=1, le=8192)
+    runtime_overrides: WorkflowRuntimeOverrides | None = None
+
+
 class CreateRunRequest(BaseModel):
     workflow: str = Field(default="demo.echo", min_length=1)
     input: str = Field(min_length=1)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    workflow_config: WorkflowConfig = Field(default_factory=WorkflowConfig)
     scheduled_at: str | None = None
     max_attempts: int = Field(default=3, ge=1, le=10)
     timeout_seconds: int = Field(default=300, ge=5, le=3600)
@@ -46,6 +67,7 @@ class RunRecord(BaseModel):
     status: RunStatus
     input: str
     metadata: dict[str, Any] = Field(default_factory=dict)
+    workflow_config: WorkflowConfig = Field(default_factory=WorkflowConfig)
     output: dict[str, Any] | None = None
     error: str | None = None
     scheduled_at: str

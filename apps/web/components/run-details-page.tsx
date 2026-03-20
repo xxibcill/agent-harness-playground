@@ -290,6 +290,7 @@ export function RunDetailsPage({ runId }: { runId: string }) {
           </div>
           <div className="payload-stack">
             <PayloadBlock label="Prompt" value={run?.input ?? "Unavailable"} />
+            <PayloadBlock label="Workflow config" value={formatJson(run?.workflow_config ?? {})} />
             <PayloadBlock label="Metadata" value={formatJson(run?.metadata ?? {})} />
             <PayloadBlock label="Output" value={formatJson(run?.output ?? {})} />
             {run?.status === "failed" || run?.status === "cancelled" ? (

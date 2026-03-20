@@ -22,6 +22,10 @@ type LauncherState = {
   workflow: string;
   input: string;
   metadataText: string;
+  model: string;
+  maxTokens: string;
+  baseUrl: string;
+  clientTimeoutSeconds: string;
   scheduledAt: string;
   maxAttempts: string;
   timeoutSeconds: string;
@@ -31,6 +35,10 @@ const initialLauncherState: LauncherState = {
   workflow: "demo.echo",
   input: "",
   metadataText: defaultMetadata,
+  model: "",
+  maxTokens: "",
+  baseUrl: "",
+  clientTimeoutSeconds: "",
   scheduledAt: "",
   maxAttempts: "3",
   timeoutSeconds: "300",
@@ -89,6 +97,7 @@ export function DashboardPage() {
       const trimmedInput = launcher.input.trim();
       const maxAttempts = Number(launcher.maxAttempts);
       const timeoutSeconds = Number(launcher.timeoutSeconds);
+      const workflowConfig = buildWorkflowConfig(launcher);
       if (!trimmedInput) {
         throw new Error("Prompt is required.");
       }
@@ -102,6 +111,7 @@ export function DashboardPage() {
         workflow: launcher.workflow.trim() || "demo.echo",
         input: trimmedInput,
         metadata,
+        workflow_config: workflowConfig,
         scheduled_at: launcher.scheduledAt ? new Date(launcher.scheduledAt).toISOString() : null,
         max_attempts: maxAttempts,
         timeout_seconds: timeoutSeconds,
@@ -162,6 +172,7 @@ export function DashboardPage() {
                 }
               >
                 <option value="demo.echo">demo.echo</option>
+                <option value="anthropic.respond">anthropic.respond</option>
               </select>
             </label>
             <label className="field">
@@ -176,6 +187,61 @@ export function DashboardPage() {
                 required
               />
             </label>
+            <div className="field-row">
+              <label className="field">
+                <span>Model</span>
+                <input
+                  placeholder="claude-sonnet-4-5"
+                  value={launcher.model}
+                  onChange={(event) =>
+                    setLauncher((current) => ({ ...current, model: event.target.value }))
+                  }
+                />
+              </label>
+              <label className="field">
+                <span>Max tokens</span>
+                <input
+                  inputMode="numeric"
+                  min={1}
+                  max={8192}
+                  onChange={(event) =>
+                    setLauncher((current) => ({ ...current, maxTokens: event.target.value }))
+                  }
+                  placeholder="Uses worker default"
+                  type="number"
+                  value={launcher.maxTokens}
+                />
+              </label>
+            </div>
+            <div className="field-row">
+              <label className="field">
+                <span>Provider base URL</span>
+                <input
+                  placeholder="Uses worker default"
+                  value={launcher.baseUrl}
+                  onChange={(event) =>
+                    setLauncher((current) => ({ ...current, baseUrl: event.target.value }))
+                  }
+                />
+              </label>
+              <label className="field">
+                <span>Client timeout (seconds)</span>
+                <input
+                  inputMode="numeric"
+                  min={1}
+                  max={3600}
+                  onChange={(event) =>
+                    setLauncher((current) => ({
+                      ...current,
+                      clientTimeoutSeconds: event.target.value,
+                    }))
+                  }
+                  placeholder="Uses worker default"
+                  type="number"
+                  value={launcher.clientTimeoutSeconds}
+                />
+              </label>
+            </div>
             <div className="field-row">
               <label className="field">
                 <span>Schedule at</span>
@@ -215,13 +281,9 @@ export function DashboardPage() {
                   value={launcher.timeoutSeconds}
                 />
               </label>
-              <label className="field">
-                <span>Config transport</span>
-                <input value="metadata JSON" disabled readOnly />
-              </label>
             </div>
             <label className="field">
-              <span>Configuration metadata</span>
+              <span>Run metadata</span>
               <textarea
                 rows={7}
                 value={launcher.metadataText}
@@ -384,6 +446,53 @@ function parseMetadata(source: string): Record<string, unknown> {
   }
 
   return parsed as Record<string, unknown>;
+}
+
+function buildWorkflowConfig(launcher: LauncherState): CreateRunRequest["workflow_config"] {
+  const model = launcher.model.trim();
+  const baseUrl = launcher.baseUrl.trim();
+  const maxTokens = parseOptionalInteger(
+    launcher.maxTokens,
+    "Max tokens must be between 1 and 8192.",
+    1,
+    8192,
+  );
+  const clientTimeoutSeconds = parseOptionalInteger(
+    launcher.clientTimeoutSeconds,
+    "Client timeout must be between 1 and 3600 seconds.",
+    1,
+    3600,
+  );
+  const hasRuntimeOverrides = Boolean(baseUrl) || clientTimeoutSeconds !== null;
+  const provider = launcher.workflow === "anthropic.respond" ? "anthropic" : null;
+
+  return {
+    provider,
+    model: model || null,
+    max_tokens: maxTokens,
+    runtime_overrides: hasRuntimeOverrides
+      ? {
+          base_url: baseUrl || null,
+          client_timeout_seconds: clientTimeoutSeconds,
+        }
+      : null,
+  };
+}
+
+function parseOptionalInteger(
+  value: string,
+  errorMessage: string,
+  min: number,
+  max: number,
+): number | null {
+  if (!value.trim()) {
+    return null;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
+    throw new Error(errorMessage);
+  }
+  return parsed;
 }
 
 function MetricCard({

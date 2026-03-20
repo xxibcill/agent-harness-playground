@@ -14,15 +14,20 @@ from agent_harness_contracts import (
     RunRecord,
     RunStatus,
     TokenUsage,
+    WorkflowConfig,
+    WorkflowProvider,
+    WorkflowRuntimeOverrides,
 )
 from pydantic import BaseModel
 
 OUTPUT_PATH = (
     Path(__file__).resolve().parents[3] / "apps" / "web" / "lib" / "generated" / "contracts.ts"
 )
-ENUMS = [RunStatus]
+ENUMS = [RunStatus, WorkflowProvider]
 MODELS = [
     TokenUsage,
+    WorkflowRuntimeOverrides,
+    WorkflowConfig,
     CreateRunRequest,
     RunRecord,
     RunEvent,

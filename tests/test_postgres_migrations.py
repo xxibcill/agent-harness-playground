@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 
 import psycopg
 import pytest
-from agent_harness_contracts import CreateRunRequest
+from agent_harness_contracts import CreateRunRequest, WorkflowConfig, WorkflowProvider
 from agent_harness_core import PostgresRunStore, RunStoreConfig
 
 DATABASE_URL = os.getenv("AGENT_HARNESS_TEST_DATABASE_URL", "").strip()
@@ -36,6 +36,11 @@ def test_postgres_migrations_are_idempotent_and_support_run_policies() -> None:
             input="postgres migration",
             max_attempts=4,
             timeout_seconds=90,
+            workflow_config=WorkflowConfig(
+                provider=WorkflowProvider.ANTHROPIC,
+                model="provider-model",
+                max_tokens=256,
+            ),
         )
     )
     fetched = store.get_run(run.run_id)
@@ -43,6 +48,8 @@ def test_postgres_migrations_are_idempotent_and_support_run_policies() -> None:
     assert fetched is not None
     assert fetched.max_attempts == 4
     assert fetched.timeout_seconds == 90
+    assert fetched.workflow_config.model == "provider-model"
+    assert fetched.workflow_config.max_tokens == 256
 
     with psycopg.connect(DATABASE_URL) as connection:
         rows = connection.execute(
@@ -51,12 +58,12 @@ def test_postgres_migrations_are_idempotent_and_support_run_policies() -> None:
             from information_schema.columns
             where table_schema = 'public'
               and table_name = 'runtime_runs'
-              and column_name in ('max_attempts', 'timeout_seconds')
+              and column_name in ('max_attempts', 'timeout_seconds', 'workflow_config')
             order by column_name
             """
         ).fetchall()
 
-    assert [row[0] for row in rows] == ["max_attempts", "timeout_seconds"]
+    assert [row[0] for row in rows] == ["max_attempts", "timeout_seconds", "workflow_config"]
 
 
 def reset_public_schema(database_url: str) -> None:
