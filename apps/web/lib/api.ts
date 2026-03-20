@@ -40,17 +40,17 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export async function listRuns(): Promise<RunRecord[]> {
-  const payload = await requestJson<ListRunsResponse>("/runs");
+  const payload = await requestJson<ListRunsResponse>("");
   return payload.runs;
 }
 
 export async function fetchRun(runId: string): Promise<RunRecord> {
-  const payload = await requestJson<CreateRunResponse>(`/runs/${runId}`);
+  const payload = await requestJson<CreateRunResponse>(`/${runId}`);
   return payload.run;
 }
 
 export async function createRun(request: CreateRunRequest): Promise<RunRecord> {
-  const payload = await requestJson<CreateRunResponse>("/runs", {
+  const payload = await requestJson<CreateRunResponse>("", {
     method: "POST",
     body: JSON.stringify(request),
   });
@@ -58,7 +58,7 @@ export async function createRun(request: CreateRunRequest): Promise<RunRecord> {
 }
 
 export async function cancelRun(runId: string): Promise<RunRecord> {
-  const payload = await requestJson<CancelRunResponse>(`/runs/${runId}/cancel`, {
+  const payload = await requestJson<CancelRunResponse>(`/${runId}/cancel`, {
     method: "POST",
   });
   return payload.run;

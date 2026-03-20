@@ -15,6 +15,7 @@ from agent_harness_observability import (
 )
 from opentelemetry.trace import SpanKind
 
+from agent_harness_core.errors import ConfigurationError, ProviderError
 from agent_harness_core.runtime import RunStore, parse_datetime, utc_now
 from agent_harness_core.workflows import (
     WorkflowDefinition,
@@ -24,7 +25,6 @@ from agent_harness_core.workflows import (
     build_default_workflow_registry,
     compile_workflow_graph,
 )
-
 
 class ExecutionCancelled(RuntimeError):
     """Raised when a run should stop because cancellation was requested."""
@@ -84,15 +84,7 @@ class RuntimeExecutor:
                         category="workflow",
                         payload={"workflow": run.workflow},
                     )
-                    self._assert_active(run.run_id, deadline)
-                    graph = self._build_graph(run)
-                    result = graph.invoke(
-                        {
-                            "user_input": run.input,
-                            "normalized_input": "",
-                            "response": "",
-                        }
-                    )
+                    result = self._invoke_workflow_graph(run, deadline)
                     self._assert_active(run.run_id, deadline)
                     self._store.append_event(
                         run.run_id,
@@ -102,13 +94,37 @@ class RuntimeExecutor:
                     )
                 completed_run = self._store.mark_run_completed(
                     run.run_id,
-                    {
-                        "response": result["response"],
-                        "normalized_input": result["normalized_input"],
-                    },
+                    self._build_run_output(result),
                 )
                 self._observability.metrics.record_run_terminal(completed_run)
                 return completed_run
+
+    def _invoke_workflow_graph(self, run: RunRecord, deadline) -> WorkflowState:  # type: ignore[no-untyped-def]
+        self._assert_active(run.run_id, deadline)
+        try:
+            graph = self._build_graph(run)
+        except ConfigurationError as exc:
+            self._append_model_failed_event(
+                run,
+                model_name=self._model_name_for_failure(run),
+                error_type="configuration_error",
+                error_message=str(exc),
+                recovery_hint="Fix the workflow configuration and submit the run again.",
+                config_field=exc.config_field,
+            )
+            raise
+
+        return cast(
+            WorkflowState,
+            graph.invoke(
+                {
+                    "user_input": run.input,
+                    "normalized_input": "",
+                    "response": "",
+                    "model_output": None,
+                }
+            ),
+        )
 
     def _build_graph(self, run: RunRecord) -> Any:
         workflow = self._workflow_registry.get(run.workflow, run)
@@ -177,11 +193,7 @@ class RuntimeExecutor:
                     event_type="node.completed",
                     category="node",
                     node_name=node_name,
-                    payload={
-                        key: value
-                        for key, value in next_state.items()
-                        if key != "user_input"
-                    },
+                    payload=self._build_node_completed_payload(next_state),
                 )
                 return next_state
         except Exception:
@@ -264,8 +276,11 @@ class RuntimeExecutor:
         started_at = perf_counter()
         outcome = "ok"
         model_name = workflow.model_name_hint or f"{run.workflow}-model"
+        provider = self._resolve_model_provider(run, model_name)
         workflow_result: WorkflowResponse | None = None
         usage: TokenUsage | None = None
+        latency_ms: int | None = None
+        request_id: str | None = None
         try:
             with start_span(
                 self._observability.tracer,
@@ -284,33 +299,97 @@ class RuntimeExecutor:
                     category="model",
                     node_name="generate_response",
                     model_name=model_name,
-                    payload={"input": state["normalized_input"]},
+                    payload={
+                        "input": state["normalized_input"],
+                        "provider": provider,
+                    },
                 )
                 self._assert_active(run.run_id, deadline)
                 workflow_result = workflow.generate_response(state["normalized_input"])
                 model_name = workflow_result.model_name
+                provider = self._resolve_model_provider(run, model_name)
                 response = workflow_result.response
                 usage = workflow_result.usage or self._build_usage(
                     state["normalized_input"], response
                 )
+                latency_ms = workflow_result.latency_ms
+                request_id = workflow_result.request_id
                 self._assert_active(run.run_id, deadline)
+                model_output = self._build_model_output(
+                    run,
+                    model_name=model_name,
+                    usage=usage,
+                    latency_ms=latency_ms,
+                    request_id=request_id,
+                )
+                payload: dict[str, Any] = {
+                    "response": response,
+                    **model_output,
+                }
                 self._store.append_event(
                     run.run_id,
                     event_type="model.completed",
                     category="model",
                     node_name="generate_response",
                     model_name=model_name,
-                    payload={
-                        "response": response,
-                        "usage": usage.model_dump(),
-                    },
+                    payload=payload,
                 )
                 return {
                     **state,
                     "response": response,
+                    "model_output": model_output,
                 }
-        except Exception:
+        except ExecutionTimedOut as exc:
             outcome = "error"
+            self._append_model_failed_event(
+                run,
+                model_name=model_name,
+                error_type="run_timeout_exceeded",
+                error_message=str(exc),
+                recovery_hint=(
+                    "Increase timeout_seconds for the run or reduce the work done by the "
+                    "selected workflow."
+                ),
+                latency_ms=latency_ms,
+                request_id=request_id,
+            )
+            raise
+        except ProviderError as exc:
+            outcome = "error"
+            self._append_model_failed_event(
+                run,
+                model_name=model_name,
+                error_type=exc.error_type,
+                error_message=str(exc),
+                recovery_hint=exc.recovery_hint,
+                latency_ms=latency_ms,
+                request_id=request_id,
+            )
+            raise
+        except ConfigurationError as exc:
+            outcome = "error"
+            self._append_model_failed_event(
+                run,
+                model_name=model_name,
+                error_type="configuration_error",
+                error_message=str(exc),
+                recovery_hint="Fix the workflow configuration and submit the run again.",
+                config_field=exc.config_field,
+                latency_ms=latency_ms,
+                request_id=request_id,
+            )
+            raise
+        except Exception as exc:
+            outcome = "error"
+            self._append_model_failed_event(
+                run,
+                model_name=model_name,
+                error_type="unknown_error",
+                error_message=str(exc),
+                error_type_name=type(exc).__name__,
+                latency_ms=latency_ms,
+                request_id=request_id,
+            )
             raise
         finally:
             if workflow_result is not None:
@@ -351,3 +430,94 @@ class RuntimeExecutor:
             output_tokens=output_tokens,
             total_tokens=input_tokens + output_tokens,
         )
+
+    def _build_run_output(self, result: WorkflowState) -> dict[str, Any]:
+        output = {
+            "response": result["response"],
+            "normalized_input": result["normalized_input"],
+        }
+        if result.get("model_output") is not None:
+            output["model"] = result["model_output"]
+        return output
+
+    def _build_node_completed_payload(self, state: WorkflowState) -> dict[str, Any]:
+        payload = {
+            key: value
+            for key, value in state.items()
+            if key not in {"user_input", "model_output"}
+        }
+        if state.get("model_output") is not None:
+            payload["model"] = state["model_output"]
+        return payload
+
+    def _append_model_failed_event(
+        self,
+        run: RunRecord,
+        *,
+        model_name: str,
+        error_type: str,
+        error_message: str,
+        recovery_hint: str | None = None,
+        config_field: str | None = None,
+        error_type_name: str | None = None,
+        latency_ms: int | None = None,
+        request_id: str | None = None,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "provider": self._resolve_model_provider(run, model_name),
+            "error_type": error_type,
+            "error_message": error_message,
+        }
+        if recovery_hint is not None:
+            payload["recovery_hint"] = recovery_hint
+        if config_field is not None:
+            payload["config_field"] = config_field
+        if error_type_name is not None:
+            payload["error_type_name"] = error_type_name
+        if latency_ms is not None:
+            payload["latency_ms"] = latency_ms
+        if request_id is not None:
+            payload["request_id"] = request_id
+
+        self._store.append_event(
+            run.run_id,
+            event_type="model.failed",
+            category="model",
+            node_name="generate_response",
+            model_name=model_name,
+            payload=payload,
+        )
+
+    def _build_model_output(
+        self,
+        run: RunRecord,
+        *,
+        model_name: str,
+        usage: TokenUsage | None,
+        latency_ms: int | None,
+        request_id: str | None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "provider": self._resolve_model_provider(run, model_name),
+            "model_name": model_name,
+            "usage": usage.model_dump() if usage is not None else {},
+        }
+        if latency_ms is not None:
+            payload["latency_ms"] = latency_ms
+        if request_id is not None:
+            payload["request_id"] = request_id
+        return payload
+
+    def _resolve_model_provider(self, run: RunRecord, model_name: str) -> str:
+        if run.workflow_config.provider is not None:
+            return str(run.workflow_config.provider)
+        if model_name.startswith("demo-"):
+            return "demo"
+        workflow_prefix = run.workflow.split(".", maxsplit=1)[0]
+        return workflow_prefix or "unknown"
+
+    def _model_name_for_failure(self, run: RunRecord) -> str:
+        configured_model = run.workflow_config.model
+        if configured_model:
+            return configured_model
+        return f"{run.workflow}-model"

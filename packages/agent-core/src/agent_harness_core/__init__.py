@@ -1,3 +1,4 @@
+from agent_harness_core.errors import ConfigurationError, ProviderError
 from agent_harness_core.executor import ExecutionCancelled, ExecutionTimedOut, RuntimeExecutor
 from agent_harness_core.runtime import (
     InMemoryRunStore,
@@ -8,7 +9,6 @@ from agent_harness_core.runtime import (
 )
 from agent_harness_core.workflows import (
     AnthropicWorkflowConfig,
-    ConfigurationError,
     UnknownWorkflowError,
     WorkflowRegistry,
     build_anthropic_workflow,
@@ -27,6 +27,7 @@ __all__ = [
     "RunStoreConfig",
     "RuntimeExecutor",
     "WorkflowRegistry",
+    "ProviderError",
     "build_anthropic_workflow",
     "build_default_workflow_registry",
     "build_run_store",

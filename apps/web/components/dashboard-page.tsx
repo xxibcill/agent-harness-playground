@@ -134,16 +134,17 @@ export function DashboardPage() {
   const failureRuns = runs
     .filter((run) => run.status === "failed" || run.status === "cancelled")
     .slice(0, 4);
+  const isModelWorkflow = launcher.workflow === "anthropic.respond";
 
   return (
     <main className="app-shell">
       <section className="hero-panel">
         <div>
-          <p className="eyebrow">Task 04 completed surface</p>
+          <p className="eyebrow">Task 09 operator surface</p>
           <h1>Operator console for live agent runs</h1>
           <p className="lede">
-            Launch new executions, watch workflow state transitions over SSE, and inspect run
-            history without moving orchestration logic out of the Python services.
+            Launch demo or model-backed executions, watch workflow state transitions over SSE, and
+            inspect provider-backed results from the same operator surface.
           </p>
         </div>
         <div className="hero-meta">
@@ -171,9 +172,14 @@ export function DashboardPage() {
                   setLauncher((current) => ({ ...current, workflow: event.target.value }))
                 }
               >
-                <option value="demo.echo">demo.echo</option>
-                <option value="anthropic.respond">anthropic.respond</option>
+                <option value="demo.echo">demo.echo (Demo mode - no API required)</option>
+                <option value="anthropic.respond">anthropic.respond (Anthropic Claude - requires API key)</option>
               </select>
+              <span className="field-hint">
+                {launcher.workflow === "anthropic.respond"
+                  ? "Model-backed workflow using Claude. Ensure ANTHROPIC_AUTH_TOKEN is configured."
+                  : "Demo workflow that echoes input. Useful for testing without API keys."}
+              </span>
             </label>
             <label className="field">
               <span>Prompt</span>
@@ -187,61 +193,73 @@ export function DashboardPage() {
                 required
               />
             </label>
-            <div className="field-row">
-              <label className="field">
-                <span>Model</span>
-                <input
-                  placeholder="claude-sonnet-4-5"
-                  value={launcher.model}
-                  onChange={(event) =>
-                    setLauncher((current) => ({ ...current, model: event.target.value }))
-                  }
-                />
-              </label>
-              <label className="field">
-                <span>Max tokens</span>
-                <input
-                  inputMode="numeric"
-                  min={1}
-                  max={8192}
-                  onChange={(event) =>
-                    setLauncher((current) => ({ ...current, maxTokens: event.target.value }))
-                  }
-                  placeholder="Uses worker default"
-                  type="number"
-                  value={launcher.maxTokens}
-                />
-              </label>
-            </div>
-            <div className="field-row">
-              <label className="field">
-                <span>Provider base URL</span>
-                <input
-                  placeholder="Uses worker default"
-                  value={launcher.baseUrl}
-                  onChange={(event) =>
-                    setLauncher((current) => ({ ...current, baseUrl: event.target.value }))
-                  }
-                />
-              </label>
-              <label className="field">
-                <span>Client timeout (seconds)</span>
-                <input
-                  inputMode="numeric"
-                  min={1}
-                  max={3600}
-                  onChange={(event) =>
-                    setLauncher((current) => ({
-                      ...current,
-                      clientTimeoutSeconds: event.target.value,
-                    }))
-                  }
-                  placeholder="Uses worker default"
-                  type="number"
-                  value={launcher.clientTimeoutSeconds}
-                />
-              </label>
-            </div>
+            {isModelWorkflow ? (
+              <>
+                <div className="field-row">
+                  <label className="field">
+                    <span>Model</span>
+                    <input
+                      placeholder="claude-sonnet-4-5"
+                      value={launcher.model}
+                      onChange={(event) =>
+                        setLauncher((current) => ({ ...current, model: event.target.value }))
+                      }
+                    />
+                    <span className="field-hint">
+                      Stored in the shared workflow config and passed through to the worker.
+                    </span>
+                  </label>
+                  <label className="field">
+                    <span>Max tokens</span>
+                    <input
+                      inputMode="numeric"
+                      min={1}
+                      max={8192}
+                      onChange={(event) =>
+                        setLauncher((current) => ({ ...current, maxTokens: event.target.value }))
+                      }
+                      placeholder="Uses worker default"
+                      type="number"
+                      value={launcher.maxTokens}
+                    />
+                  </label>
+                </div>
+                <div className="field-row">
+                  <label className="field">
+                    <span>Provider base URL</span>
+                    <input
+                      placeholder="Uses worker default"
+                      value={launcher.baseUrl}
+                      onChange={(event) =>
+                        setLauncher((current) => ({ ...current, baseUrl: event.target.value }))
+                      }
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Client timeout (seconds)</span>
+                    <input
+                      inputMode="numeric"
+                      min={1}
+                      max={3600}
+                      onChange={(event) =>
+                        setLauncher((current) => ({
+                          ...current,
+                          clientTimeoutSeconds: event.target.value,
+                        }))
+                      }
+                      placeholder="Uses worker default"
+                      type="number"
+                      value={launcher.clientTimeoutSeconds}
+                    />
+                  </label>
+                </div>
+              </>
+            ) : (
+              <p className="field-hint">
+                Demo runs do not require provider configuration. Switch to
+                `anthropic.respond` to supply model, token, and runtime override settings.
+              </p>
+            )}
             <div className="field-row">
               <label className="field">
                 <span>Schedule at</span>

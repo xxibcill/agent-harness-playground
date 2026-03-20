@@ -13,7 +13,7 @@ from agent_harness_core import (
     RuntimeExecutor,
     build_run_store,
 )
-from agent_harness_core.executor import ExecutionTimedOut
+from agent_harness_core.executor import ConfigurationError, ExecutionTimedOut, ProviderError
 from agent_harness_core.runtime import parse_datetime, utc_now
 from agent_harness_observability import CorrelationFilter, bind_log_context, build_observability
 
@@ -107,6 +107,35 @@ def run_once(
             observability=observability,
             event_type="run.timeout_exceeded",
         )
+    except ConfigurationError as exc:
+        _handle_terminal_failure(
+            store=store,
+            run_id=run.run_id,
+            error=str(exc),
+            observability=observability,
+        )
+    except ProviderError as exc:
+        if exc.error_type in {
+            "connection_error",
+            "rate_limit_error",
+            "service_error",
+            "timeout_error",
+        }:
+            _handle_retryable_failure(
+                store=store,
+                run=run,
+                config=config,
+                error=str(exc),
+                observability=observability,
+                event_type="run.execution_failed",
+            )
+        else:
+            _handle_terminal_failure(
+                store=store,
+                run_id=run.run_id,
+                error=str(exc),
+                observability=observability,
+            )
     except Exception as exc:
         _handle_retryable_failure(
             store=store,
@@ -146,6 +175,18 @@ def _handle_retryable_failure(
         return
 
     failed = store.mark_run_failed(run.run_id, error)
+    if observability is not None:
+        observability.metrics.record_run_terminal(failed)
+
+
+def _handle_terminal_failure(
+    *,
+    store: RunStore,
+    run_id: str,
+    error: str,
+    observability=None,
+) -> None:
+    failed = store.mark_run_failed(run_id, error)
     if observability is not None:
         observability.metrics.record_run_terminal(failed)
 

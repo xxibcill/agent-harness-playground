@@ -16,6 +16,7 @@ import {
   formatDateTime,
   formatDuration,
   formatJson,
+  formatLatency,
   formatPayloadPreview,
   formatRelativeTime,
   formatStatusLabel,
@@ -162,6 +163,7 @@ export function RunDetailsPage({ runId }: { runId: string }) {
   const workflowNodes = buildWorkflowNodes(run, events);
   const failureSummary = run ? buildFailureSummary(run, events) : null;
   const traceEvents = events.filter((event) => event.trace_id || event.span_id);
+  const modelOutput = readModelOutput(run);
 
   return (
     <main className="app-shell">
@@ -173,8 +175,8 @@ export function RunDetailsPage({ runId }: { runId: string }) {
           <p className="section-label">Historical run detail</p>
           <h1>{run?.run_id ?? runId}</h1>
           <p className="lede">
-            Live state follows the API event stream. Historical state is loaded from the same run
-            record and event history endpoints.
+            Live state follows the API event stream. Stored output and event history explain both
+            demo executions and real provider-backed runs from the same operator page.
           </p>
         </div>
         <div className="detail-header__actions">
@@ -220,7 +222,13 @@ export function RunDetailsPage({ runId }: { runId: string }) {
         <MetricPanel
           label="Model usage"
           value={`${metrics.totalTokens} tokens`}
-          detail={`${metrics.modelCalls} model call(s) • ${metrics.toolCalls} tool call(s)`}
+          detail={
+            metrics.hasModelFailure
+              ? `Failed • ${metrics.modelFailureType ?? "Unknown error"}`
+              : metrics.isModelBacked
+                ? `${metrics.modelCalls} call(s) • ${formatLatency(metrics.latencyMs)}${metrics.modelName ? ` • ${metrics.modelName}` : ""}${metrics.modelProvider ? ` • ${metrics.modelProvider}` : ""}${metrics.requestId ? ` • ${metrics.requestId.slice(0, 8)}...` : ""}`
+                : `${metrics.modelCalls} model call(s) • Demo mode`
+          }
         />
       </section>
 
@@ -269,6 +277,26 @@ export function RunDetailsPage({ runId }: { runId: string }) {
               <dd>{run?.traceparent ?? "Unavailable"}</dd>
             </div>
             <div>
+              <dt>Configured provider</dt>
+              <dd>{run?.workflow_config.provider ?? "Demo / default"}</dd>
+            </div>
+            <div>
+              <dt>Configured model</dt>
+              <dd>{run?.workflow_config.model ?? "Worker default"}</dd>
+            </div>
+            <div>
+              <dt>Max tokens</dt>
+              <dd>{run?.workflow_config.max_tokens ?? "Worker default"}</dd>
+            </div>
+            <div>
+              <dt>Client timeout</dt>
+              <dd>
+                {run?.workflow_config.runtime_overrides?.client_timeout_seconds
+                  ? `${run.workflow_config.runtime_overrides.client_timeout_seconds}s`
+                  : "Worker default"}
+              </dd>
+            </div>
+            <div>
               <dt>Created</dt>
               <dd>{formatDateTime(run?.created_at)}</dd>
             </div>
@@ -291,6 +319,9 @@ export function RunDetailsPage({ runId }: { runId: string }) {
           <div className="payload-stack">
             <PayloadBlock label="Prompt" value={run?.input ?? "Unavailable"} />
             <PayloadBlock label="Workflow config" value={formatJson(run?.workflow_config ?? {})} />
+            {modelOutput ? (
+              <PayloadBlock label="Model execution" value={formatJson(modelOutput)} />
+            ) : null}
             <PayloadBlock label="Metadata" value={formatJson(run?.metadata ?? {})} />
             <PayloadBlock label="Output" value={formatJson(run?.output ?? {})} />
             {run?.status === "failed" || run?.status === "cancelled" ? (
@@ -491,4 +522,12 @@ function EmptyState({ title, copy }: { title: string; copy: string }) {
       <p>{copy}</p>
     </div>
   );
+}
+
+function readModelOutput(run: RunRecord | null): Record<string, unknown> | null {
+  const value = run?.output?.model;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
 }

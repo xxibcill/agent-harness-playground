@@ -98,6 +98,16 @@ export function formatDuration(
   return `${minutes}m ${seconds}s`;
 }
 
+export function formatLatency(latencyMs: number | null | undefined): string {
+  if (latencyMs === null || latencyMs === undefined) {
+    return "N/A";
+  }
+  if (latencyMs < 1000) {
+    return `${latencyMs}ms`;
+  }
+  return `${(latencyMs / 1000).toFixed(2)}s`;
+}
+
 export function formatJson(value: unknown): string {
   return JSON.stringify(value ?? {}, null, 2);
 }
@@ -140,20 +150,68 @@ export function summarizeRunMetrics(run: RunRecord | null, events: RunEvent[]): 
   outputTokens: number;
   totalTokens: number;
   activeNode: string;
+  latencyMs: number | null;
+  requestId: string | null;
+  isModelBacked: boolean;
+  modelName: string | null;
+  modelProvider: string | null;
+  hasModelFailure: boolean;
+  modelFailureType: string | null;
+  modelFailureHint: string | null;
 } {
-  let inputTokens = 0;
-  let outputTokens = 0;
-  let totalTokens = 0;
+  const storedModel = readObject(run?.output?.model);
+  const storedUsage = readObject(storedModel?.usage);
+
+  let inputTokens = readInteger(storedUsage?.input_tokens);
+  let outputTokens = readInteger(storedUsage?.output_tokens);
+  let totalTokens = readInteger(storedUsage?.total_tokens);
+  let latencyMs = readOptionalInteger(storedModel?.latency_ms);
+  let requestId = readOptionalString(storedModel?.request_id);
+  let isModelBacked = readOptionalString(storedModel?.provider) !== "demo";
+  let modelName = readOptionalString(storedModel?.model_name);
+  let modelProvider = readOptionalString(storedModel?.provider);
+  let hasModelFailure = false;
+  let modelFailureType: string | null = null;
+  let modelFailureHint: string | null = null;
 
   for (const event of events) {
-    if (event.event_type !== "model.completed") {
-      continue;
+    if (event.event_type === "model.completed") {
+      const usage = event.payload.usage as Record<string, unknown> | undefined;
+      inputTokens += Number(usage?.input_tokens ?? 0);
+      outputTokens += Number(usage?.output_tokens ?? 0);
+      totalTokens += Number(usage?.total_tokens ?? 0);
+
+      if (event.payload.latency_ms !== undefined) {
+        latencyMs = Number(event.payload.latency_ms);
+      }
+      if (event.payload.request_id && typeof event.payload.request_id === "string") {
+        requestId = event.payload.request_id;
+      }
+      if (event.model_name) {
+        modelName = event.model_name;
+        if (!event.model_name.startsWith("demo-")) {
+          isModelBacked = true;
+        }
+      }
+      if (typeof event.payload.provider === "string") {
+        modelProvider = event.payload.provider;
+        isModelBacked = event.payload.provider !== "demo";
+      } else if (event.model_name) {
+        modelProvider = inferProviderFromModelName(event.model_name);
+      }
     }
 
-    const usage = event.payload.usage as Record<string, unknown> | undefined;
-    inputTokens += Number(usage?.input_tokens ?? 0);
-    outputTokens += Number(usage?.output_tokens ?? 0);
-    totalTokens += Number(usage?.total_tokens ?? 0);
+    if (event.event_type === "model.failed") {
+      hasModelFailure = true;
+      modelFailureType = (event.payload.error_type as string) ?? "unknown_error";
+      modelFailureHint = (event.payload.recovery_hint as string) ?? null;
+      if (event.model_name) {
+        modelName = event.model_name;
+      }
+      if (typeof event.payload.provider === "string") {
+        modelProvider = event.payload.provider;
+      }
+    }
   }
 
   return {
@@ -167,6 +225,14 @@ export function summarizeRunMetrics(run: RunRecord | null, events: RunEvent[]): 
     outputTokens,
     totalTokens,
     activeNode: findActiveNode(run, events),
+    latencyMs,
+    requestId,
+    isModelBacked,
+    modelName,
+    modelProvider,
+    hasModelFailure,
+    modelFailureType,
+    modelFailureHint,
   };
 }
 
@@ -198,6 +264,43 @@ export function mergeEventStream(current: RunEvent[], nextEvent: RunEvent): RunE
 }
 
 export function buildFailureSummary(run: RunRecord, events: RunEvent[]): string {
+  const modelFailure = [...events]
+    .reverse()
+    .find((event) => event.event_type === "model.failed");
+  if (modelFailure) {
+    const message =
+      typeof modelFailure.payload.error_message === "string"
+        ? modelFailure.payload.error_message
+        : run.error ?? "No failure details recorded.";
+
+    if (
+      modelFailure.payload.recovery_hint &&
+      typeof modelFailure.payload.recovery_hint === "string"
+    ) {
+      return `${message}\n\nRecovery suggestion: ${modelFailure.payload.recovery_hint}`;
+    }
+
+    if (modelFailure.payload.error_type === "configuration_error") {
+      const configField = modelFailure.payload.config_field as string | undefined;
+      if (configField) {
+        return `${message}\n\nConfiguration issue: ${configField}`;
+      }
+    }
+
+    if (modelFailure.payload.error_type === "run_timeout_exceeded") {
+      return `${message}\n\nRun timeout exceeded. Increase timeout_seconds or reduce the workflow scope.`;
+    }
+
+    return message;
+  }
+
+  const timeoutEvent = [...events]
+    .reverse()
+    .find((event) => event.event_type === "run.timeout_exceeded");
+  if (timeoutEvent && typeof timeoutEvent.payload.error === "string") {
+    return `${timeoutEvent.payload.error}\n\nRun timeout exceeded. Increase timeout_seconds or reduce the workflow scope.`;
+  }
+
   if (run.error) {
     return run.error;
   }
@@ -211,7 +314,8 @@ export function buildFailureSummary(run: RunRecord, events: RunEvent[]): string 
   }
 
   const reason = terminalEvent.payload.error ?? terminalEvent.payload.reason;
-  return typeof reason === "string" ? reason : "No failure details recorded.";
+  const baseMessage = typeof reason === "string" ? reason : "No failure details recorded.";
+  return baseMessage;
 }
 
 export function formatPayloadPreview(payload: Record<string, unknown>): string {
@@ -313,4 +417,36 @@ function findActiveNode(run: RunRecord | null, events: RunEvent[]): string {
   }
 
   return run.status === "queued" ? "Queued" : "Waiting for event";
+}
+
+function readObject(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function readInteger(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function readOptionalInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function readOptionalString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function inferProviderFromModelName(modelName: string): string | null {
+  if (modelName.startsWith("claude-")) {
+    return "anthropic";
+  }
+  if (modelName.startsWith("gpt-")) {
+    return "openai";
+  }
+  if (modelName.startsWith("demo-")) {
+    return "demo";
+  }
+  return null;
 }

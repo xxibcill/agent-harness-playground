@@ -14,14 +14,15 @@ from agent_harness_contracts import (
     WorkflowRuntimeOverrides,
 )
 from agent_harness_core import InMemoryRunStore, RuntimeExecutor
-from agent_harness_core.executor import ExecutionTimedOut
+from agent_harness_core.executor import ExecutionTimedOut, ProviderError
 from agent_harness_core.runtime import utc_now
 from agent_harness_core.workflows import (
     UnknownWorkflowError,
+    WorkflowDefinition,
     WorkflowRegistry,
     build_anthropic_workflow,
 )
-from agent_harness_core.workflows.demo_echo import create_demo_echo_workflow
+from agent_harness_core.workflows.demo_echo import create_demo_echo_workflow, normalize_whitespace
 from agent_harness_observability import build_observability
 from agent_harness_worker.main import WorkerConfig, run_once
 from fastapi.testclient import TestClient
@@ -196,6 +197,17 @@ def test_worker_executes_queued_runs_and_persists_runtime_events() -> None:
     assert completed.output == {
         "response": "Echo: hello worker",
         "normalized_input": "hello worker",
+        "model": {
+            "provider": "demo",
+            "model_name": "demo-echo-model",
+            "usage": {
+                "input_tokens": 2,
+                "output_tokens": 3,
+                "total_tokens": 5,
+            },
+            "latency_ms": completed.output["model"]["latency_ms"],
+            "request_id": "demo-echo",
+        },
     }
 
     event_types = [event.event_type for event in store.list_events(run.run_id)]
@@ -320,6 +332,17 @@ def test_worker_executes_anthropic_workflow_from_registry(monkeypatch) -> None:
     assert completed.output == {
         "response": "Shared model reply",
         "normalized_input": "hello worker",
+        "model": {
+            "provider": "anthropic",
+            "model_name": "run-selected-model",
+            "usage": {
+                "input_tokens": 4,
+                "output_tokens": 3,
+                "total_tokens": 7,
+            },
+            "latency_ms": completed.output["model"]["latency_ms"],
+            "request_id": "req_worker_1",
+        },
     }
     assert captured_client_config == {
         "model": "run-selected-model",
@@ -507,3 +530,336 @@ def test_api_enforces_roles_for_operator_and_admin_routes() -> None:
 
     admin_metrics = client.get("/metrics", headers={"Authorization": "Bearer admin-token"})
     assert admin_metrics.status_code == 200
+
+
+def test_end_to_end_web_submission_through_worker_completion(monkeypatch) -> None:
+    captured_request: dict[str, object] = {}
+
+    class FakeMessages:
+        def create(self, **kwargs: object):
+            captured_request.update(kwargs)
+            return type(
+                "Response",
+                (),
+                {
+                    "content": [
+                        type("Block", (), {"type": "text", "text": "Model-backed reply"})()
+                    ],
+                    "usage": type(
+                        "Usage",
+                        (),
+                        {
+                            "input_tokens": 6,
+                            "output_tokens": 4,
+                            "cache_creation_input_tokens": 0,
+                            "cache_read_input_tokens": 0,
+                        },
+                    )(),
+                    "_request_id": "req_e2e_1",
+                },
+            )()
+
+    class FakeClient:
+        def __init__(self, _config) -> None:
+            self.messages = FakeMessages()
+
+    monkeypatch.setattr(
+        "agent_harness_core.workflows.anthropic.load_project_env",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "agent_harness_core.workflows.anthropic.create_client",
+        lambda config: FakeClient(config),
+    )
+    monkeypatch.setattr(
+        "agent_harness_core.workflows.anthropic.append_usage_entry",
+        lambda _entry: None,
+    )
+    monkeypatch.setattr(
+        "agent_harness_core.workflows.anthropic.read_usage_entries",
+        lambda: [],
+    )
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "test-token")
+    monkeypatch.setenv("API_TIMEOUT_MS", "30000")
+
+    store = InMemoryRunStore()
+    client = TestClient(create_app(store=store))
+    registry = WorkflowRegistry(
+        {
+            "demo.echo": create_demo_echo_workflow(),
+            "anthropic.respond": build_anthropic_workflow,
+        }
+    )
+
+    create_response = client.post(
+        "/runs",
+        json={
+            "workflow": "anthropic.respond",
+            "input": "Test end-to-end execution",
+            "metadata": {"origin": "e2e-test", "user": "test-operator"},
+            "workflow_config": {
+                "provider": "anthropic",
+                "model": "claude-test-model",
+                "max_tokens": 128,
+            },
+            "max_attempts": 1,
+            "timeout_seconds": 60,
+        },
+    )
+    assert create_response.status_code == 202
+    run_id = create_response.json()["run"]["run_id"]
+
+    did_work = run_once(
+        store,
+        RuntimeExecutor(store, workflow_registry=registry),
+        WorkerConfig(poll_interval_seconds=0.0, lease_seconds=30, worker_id="worker-test"),
+    )
+
+    assert did_work is True
+    completed = store.get_run(run_id)
+    assert completed is not None
+    assert completed.status == RunStatus.COMPLETED
+    assert completed.output == {
+        "response": "Model-backed reply",
+        "normalized_input": "Test end-to-end execution",
+        "model": {
+            "provider": "anthropic",
+            "model_name": "claude-test-model",
+            "usage": {
+                "input_tokens": 6,
+                "output_tokens": 4,
+                "total_tokens": 10,
+            },
+            "latency_ms": completed.output["model"]["latency_ms"],
+            "request_id": "req_e2e_1",
+        },
+    }
+    assert captured_request == {
+        "model": "claude-test-model",
+        "max_tokens": 128,
+        "messages": [{"role": "user", "content": "Test end-to-end execution"}],
+    }
+
+    get_response = client.get(f"/runs/{run_id}")
+    assert get_response.status_code == 200
+    assert get_response.json()["run"]["status"] == RunStatus.COMPLETED.value
+
+    stream_response = client.get(
+        f"/runs/{run_id}/events/stream",
+        params={"follow": "false"},
+    )
+    assert stream_response.status_code == 200
+    assert '"event_type": "model.started"' in stream_response.text
+    assert '"event_type": "model.completed"' in stream_response.text
+
+
+def test_demo_workflow_persists_structured_model_output_for_operator_ui() -> None:
+    store = InMemoryRunStore()
+    run = store.create_run(CreateRunRequest(input="  hello   metrics  "))
+
+    did_work = run_once(
+        store,
+        RuntimeExecutor(store),
+        WorkerConfig(poll_interval_seconds=0.0, lease_seconds=30, worker_id="worker-test"),
+    )
+
+    assert did_work is True
+    completed = store.get_run(run.run_id)
+    assert completed is not None
+    assert completed.status == RunStatus.COMPLETED
+    assert completed.output == {
+        "response": "Echo: hello metrics",
+        "normalized_input": "hello metrics",
+        "model": {
+            "provider": "demo",
+            "model_name": "demo-echo-model",
+            "usage": {
+                "input_tokens": 2,
+                "output_tokens": 3,
+                "total_tokens": 5,
+            },
+            "latency_ms": completed.output["model"]["latency_ms"],
+            "request_id": "demo-echo",
+        },
+    }
+
+    events = store.list_events(run.run_id)
+    model_completed = next(event for event in events if event.event_type == "model.completed")
+    assert model_completed.payload["provider"] == "demo"
+    assert model_completed.payload["model_name"] == "demo-echo-model"
+    assert model_completed.payload["usage"] == {
+        "input_tokens": 2,
+        "output_tokens": 3,
+        "total_tokens": 5,
+    }
+
+
+def test_configuration_failure_emits_model_failed_and_marks_run_failed(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "agent_harness_core.workflows.anthropic.load_project_env",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_MODEL", raising=False)
+
+    store = InMemoryRunStore()
+    run = store.create_run(
+        CreateRunRequest(
+            workflow="anthropic.respond",
+            input="configuration failure",
+            workflow_config=WorkflowConfig(
+                provider=WorkflowProvider.ANTHROPIC,
+                model="claude-missing-token",
+            ),
+            max_attempts=1,
+        )
+    )
+    registry = WorkflowRegistry(
+        {
+            "demo.echo": create_demo_echo_workflow(),
+            "anthropic.respond": build_anthropic_workflow,
+        }
+    )
+
+    did_work = run_once(
+        store,
+        RuntimeExecutor(store, workflow_registry=registry),
+        WorkerConfig(poll_interval_seconds=0.0, lease_seconds=30, worker_id="worker-test"),
+    )
+
+    assert did_work is True
+    failed = store.get_run(run.run_id)
+    assert failed is not None
+    assert failed.status == RunStatus.FAILED
+
+    events = store.list_events(run.run_id)
+    model_failed = next(event for event in events if event.event_type == "model.failed")
+    assert model_failed.payload["error_type"] == "configuration_error"
+    assert "ANTHROPIC_AUTH_TOKEN" in model_failed.payload["error_message"]
+    assert model_failed.model_name == "claude-missing-token"
+    assert "run.retry_scheduled" not in [event.event_type for event in events]
+
+
+def test_provider_error_emits_recovery_hint_and_stops_retrying() -> None:
+    def build_provider_failure_workflow(_run=None) -> WorkflowDefinition:
+        def generate_response(_normalized_input: str):
+            raise ProviderError(
+                "Provider rejected the request.",
+                error_type="authentication_error",
+                recovery_hint="Rotate the API key or verify the configured model access.",
+            )
+
+        return WorkflowDefinition(
+            name="anthropic.respond",
+            normalize_input=normalize_whitespace,
+            generate_response=generate_response,
+            model_name_hint="claude-auth-failure",
+        )
+
+    store = InMemoryRunStore()
+    run = store.create_run(
+        CreateRunRequest(
+            workflow="anthropic.respond",
+            input="provider failure",
+            workflow_config=WorkflowConfig(
+                provider=WorkflowProvider.ANTHROPIC,
+                model="claude-auth-failure",
+            ),
+            max_attempts=2,
+        )
+    )
+    registry = WorkflowRegistry(
+        {
+            "demo.echo": create_demo_echo_workflow(),
+            "anthropic.respond": build_provider_failure_workflow,
+        }
+    )
+
+    did_work = run_once(
+        store,
+        RuntimeExecutor(store, workflow_registry=registry),
+        WorkerConfig(poll_interval_seconds=0.0, lease_seconds=30, worker_id="worker-test"),
+    )
+
+    assert did_work is True
+    failed = store.get_run(run.run_id)
+    assert failed is not None
+    assert failed.status == RunStatus.FAILED
+    assert failed.attempt_count == 1
+
+    events = store.list_events(run.run_id)
+    model_failed = next(event for event in events if event.event_type == "model.failed")
+    assert model_failed.payload["error_type"] == "authentication_error"
+    assert (
+        model_failed.payload["recovery_hint"]
+        == "Rotate the API key or verify the configured model access."
+    )
+    assert "run.retry_scheduled" not in [event.event_type for event in events]
+
+
+def test_timeout_error_emits_model_and_run_failure_events() -> None:
+    class TimeoutDuringModelExecutor(RuntimeExecutor):
+        def __init__(self, store: InMemoryRunStore) -> None:
+            super().__init__(store)
+            self._deadline_checks = 0
+
+        def _assert_within_deadline(self, run_id: str, deadline) -> None:  # type: ignore[override,no-untyped-def]
+            self._deadline_checks += 1
+            if self._deadline_checks >= 12:
+                raise ExecutionTimedOut(f"Run {run_id} exceeded its timeout budget.")
+            super()._assert_within_deadline(run_id, deadline)
+
+    store = InMemoryRunStore()
+    run = store.create_run(
+        CreateRunRequest(
+            input="timeout me",
+            max_attempts=1,
+            timeout_seconds=5,
+        )
+    )
+
+    did_work = run_once(
+        store,
+        TimeoutDuringModelExecutor(store),
+        WorkerConfig(poll_interval_seconds=0.0, lease_seconds=30, worker_id="worker-test"),
+    )
+
+    assert did_work is True
+    failed = store.get_run(run.run_id)
+    assert failed is not None
+    assert failed.status == RunStatus.FAILED
+
+    event_types = [event.event_type for event in store.list_events(run.run_id)]
+    assert "model.started" in event_types
+    assert "model.failed" in event_types
+    assert "run.timeout_exceeded" in event_types
+    assert event_types[-1] == "run.failed"
+
+    model_failed = next(
+        event for event in store.list_events(run.run_id) if event.event_type == "model.failed"
+    )
+    assert model_failed.payload["error_type"] == "run_timeout_exceeded"
+
+
+def test_event_sequence_ordering_and_consistency() -> None:
+    store = InMemoryRunStore()
+    run = store.create_run(CreateRunRequest(input="sequence test"))
+
+    did_work = run_once(
+        store,
+        RuntimeExecutor(store),
+        WorkerConfig(poll_interval_seconds=0.0, lease_seconds=30, worker_id="worker-test"),
+    )
+
+    assert did_work is True
+    events = store.list_events(run.run_id)
+    sequences = [event.sequence for event in events]
+    assert sequences == sorted(sequences)
+    assert sequences == list(range(1, len(sequences) + 1))
+
+    event_types = [event.event_type for event in events]
+    assert event_types[:2] == ["run.created", "run.queued"]
+    assert event_types[-1] == "run.completed"
