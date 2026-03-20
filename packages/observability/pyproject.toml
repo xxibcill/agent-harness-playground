@@ -1,0 +1,16 @@
+[project]
+name = "agent-harness-observability"
+version = "0.1.0"
+description = "Shared tracing, metrics, and correlation helpers for the agent harness platform."
+requires-python = ">=3.11"
+dependencies = [
+    "agent-harness-contracts",
+    "opentelemetry-api>=1.38.0,<2.0.0",
+    "opentelemetry-sdk>=1.38.0,<2.0.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.38.0,<2.0.0",
+    "prometheus-client>=0.22.0,<1.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

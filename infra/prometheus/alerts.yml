@@ -1,0 +1,29 @@
+groups:
+  - name: agent-harness-alerts
+    rules:
+      - alert: AgentHarnessRunFailures
+        expr: increase(agent_harness_run_terminal_total{status="failed"}[5m]) > 0
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: Agent runs are failing
+          description: At least one run failed in the last five minutes.
+
+      - alert: AgentHarnessQueueBacklog
+        expr: agent_harness_queue_oldest_age_seconds > 120
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Queued work is getting stuck
+          description: The oldest queued run has been waiting for more than two minutes.
+
+      - alert: AgentHarnessThroughputDrop
+        expr: rate(agent_harness_runs_started_total[15m]) < 0.01
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Worker throughput is degraded
+          description: Workers have almost stopped claiming runs for the last fifteen minutes.

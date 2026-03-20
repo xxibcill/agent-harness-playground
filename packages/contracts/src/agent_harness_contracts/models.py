@@ -55,6 +55,8 @@ class RunRecord(BaseModel):
     attempt_count: int = 0
     worker_id: str | None = None
     lease_expires_at: str | None = None
+    trace_id: str | None = None
+    traceparent: str | None = None
 
 
 class RunEvent(BaseModel):
@@ -67,6 +69,9 @@ class RunEvent(BaseModel):
     node_name: str | None = None
     tool_name: str | None = None
     model_name: str | None = None
+    trace_id: str | None = None
+    span_id: str | None = None
+    parent_span_id: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
 
 

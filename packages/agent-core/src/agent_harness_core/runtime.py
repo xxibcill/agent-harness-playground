@@ -16,6 +16,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from agent_harness_contracts import CreateRunRequest, RunEvent, RunRecord, RunStatus, TokenUsage
+from agent_harness_observability import capture_current_trace
 
 
 def utc_now() -> datetime:
@@ -51,6 +52,8 @@ class RunStore(Protocol):
     def list_runs(self) -> list[RunRecord]: ...
 
     def get_run(self, run_id: str) -> RunRecord | None: ...
+
+    def set_run_trace_context(self, run_id: str, trace_id: str, traceparent: str) -> RunRecord: ...
 
     def cancel_run(self, run_id: str) -> RunRecord | None: ...
 
@@ -96,6 +99,7 @@ class InMemoryRunStore:
         now = utc_now()
         scheduled_at = parse_datetime(request.scheduled_at) or now
         run_id = f"run_{uuid.uuid4().hex}"
+        trace = capture_current_trace()
         with self._lock:
             payload = {
                 "run_id": run_id,
@@ -116,6 +120,8 @@ class InMemoryRunStore:
                 "lease_expires_at": None,
                 "event_sequence": 0,
                 "lease_owner": None,
+                "trace_id": trace.trace_id,
+                "traceparent": trace.traceparent,
             }
             self._runs[run_id] = payload
             self._events[run_id] = []
@@ -146,6 +152,14 @@ class InMemoryRunStore:
         with self._lock:
             run = self._runs.get(run_id)
             return None if run is None else self._build_run(run)
+
+    def set_run_trace_context(self, run_id: str, trace_id: str, traceparent: str) -> RunRecord:
+        with self._lock:
+            run = self._require_run(run_id)
+            run["trace_id"] = trace_id
+            run["traceparent"] = traceparent
+            run["updated_at"] = utc_now()
+            return self._build_run(run)
 
     def cancel_run(self, run_id: str) -> RunRecord | None:
         with self._lock:
@@ -323,6 +337,7 @@ class InMemoryRunStore:
         model_name: str | None = None,
     ) -> dict[str, Any]:
         run = self._require_run(run_id)
+        trace = capture_current_trace()
         run["event_sequence"] += 1
         event = {
             "event_id": f"evt_{uuid.uuid4().hex}",
@@ -334,6 +349,9 @@ class InMemoryRunStore:
             "node_name": node_name,
             "tool_name": tool_name,
             "model_name": model_name,
+            "trace_id": trace.trace_id or cast(str | None, run["trace_id"]),
+            "span_id": trace.span_id,
+            "parent_span_id": trace.parent_span_id,
             "payload": payload or {},
         }
         self._events[run_id].append(event)
@@ -363,6 +381,8 @@ class InMemoryRunStore:
             attempt_count=cast(int, run["attempt_count"]),
             worker_id=cast(str | None, run["worker_id"]),
             lease_expires_at=to_iso8601(cast(datetime | None, run["lease_expires_at"])),
+            trace_id=cast(str | None, run["trace_id"]),
+            traceparent=cast(str | None, run["traceparent"]),
         )
 
     def _build_event(self, event: dict[str, Any]) -> RunEvent:
@@ -376,6 +396,9 @@ class InMemoryRunStore:
             node_name=cast(str | None, event["node_name"]),
             tool_name=cast(str | None, event["tool_name"]),
             model_name=cast(str | None, event["model_name"]),
+            trace_id=cast(str | None, event["trace_id"]),
+            span_id=cast(str | None, event["span_id"]),
+            parent_span_id=cast(str | None, event["parent_span_id"]),
             payload=cast(dict[str, Any], event["payload"]),
         )
 
@@ -391,6 +414,7 @@ class PostgresRunStore:
 
     def create_run(self, request: CreateRunRequest) -> RunRecord:
         run_id = f"run_{uuid.uuid4().hex}"
+        trace = capture_current_trace()
         with self._connection() as connection, connection.transaction():
             scheduled_at = parse_datetime(request.scheduled_at) or utc_now()
             row = connection.execute(
@@ -401,9 +425,11 @@ class PostgresRunStore:
                     status,
                     input_text,
                     metadata,
-                    scheduled_at
+                    scheduled_at,
+                    trace_id,
+                    traceparent
                 )
-                values (%s, %s, %s, %s, %s::jsonb, %s)
+                values (%s, %s, %s, %s, %s::jsonb, %s, %s, %s)
                 returning *
                 """,
                 (
@@ -413,6 +439,8 @@ class PostgresRunStore:
                     request.input,
                     json.dumps(request.metadata),
                     scheduled_at,
+                    trace.trace_id,
+                    trace.traceparent,
                 ),
             ).fetchone()
             self._insert_event(
@@ -445,6 +473,23 @@ class PostgresRunStore:
                 (run_id,),
             ).fetchone()
         return None if row is None else self._build_run(dict(row))
+
+    def set_run_trace_context(self, run_id: str, trace_id: str, traceparent: str) -> RunRecord:
+        with self._connection() as connection, connection.transaction():
+            row = connection.execute(
+                """
+                update runtime_runs
+                set trace_id = %s,
+                    traceparent = %s,
+                    updated_at = now()
+                where run_id = %s
+                returning *
+                """,
+                (trace_id, traceparent, run_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"Run {run_id} does not exist.")
+        return self._build_run(dict(row))
 
     def cancel_run(self, run_id: str) -> RunRecord | None:
         with self._connection() as connection, connection.transaction():
@@ -711,16 +756,19 @@ class PostgresRunStore:
         tool_name: str | None = None,
         model_name: str | None = None,
     ) -> Any:
-        sequence = connection.execute(
+        trace = capture_current_trace()
+        run_state = connection.execute(
             """
             update runtime_runs
             set event_sequence = event_sequence + 1,
                 updated_at = now()
             where run_id = %s
-            returning event_sequence
+            returning event_sequence, trace_id
             """,
             (run_id,),
-        ).fetchone()["event_sequence"]
+        ).fetchone()
+        sequence = run_state["event_sequence"]
+        trace_id = trace.trace_id or run_state["trace_id"]
         row = connection.execute(
             """
             insert into runtime_run_events (
@@ -732,9 +780,12 @@ class PostgresRunStore:
                 node_name,
                 tool_name,
                 model_name,
+                trace_id,
+                span_id,
+                parent_span_id,
                 payload
             )
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
             returning *
             """,
             (
@@ -746,6 +797,9 @@ class PostgresRunStore:
                 node_name,
                 tool_name,
                 model_name,
+                trace_id,
+                trace.span_id,
+                trace.parent_span_id,
                 json.dumps(payload or {}),
             ),
         ).fetchone()
@@ -839,6 +893,8 @@ class PostgresRunStore:
             attempt_count=row["attempt_count"],
             worker_id=row["worker_id"],
             lease_expires_at=to_iso8601(row["lease_expires_at"]),
+            trace_id=row["trace_id"],
+            traceparent=row["traceparent"],
         )
 
     def _build_event(self, row: dict[str, Any]) -> RunEvent:
@@ -852,5 +908,8 @@ class PostgresRunStore:
             node_name=row["node_name"],
             tool_name=row["tool_name"],
             model_name=row["model_name"],
+            trace_id=row["trace_id"],
+            span_id=row["span_id"],
+            parent_span_id=row["parent_span_id"],
             payload=row["payload"] or {},
         )

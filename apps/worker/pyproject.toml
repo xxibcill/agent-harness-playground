@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     "agent-harness-contracts",
     "agent-harness-core",
+    "agent-harness-observability",
 ]
 
 [project.scripts]

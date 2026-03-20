@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 
 from fastapi.testclient import TestClient
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from agent_harness_contracts import CreateRunRequest, RunStatus
 from agent_harness_core import InMemoryRunStore, RuntimeExecutor
 from agent_harness_api.main import create_app
+from agent_harness_observability import build_observability
 from agent_harness_worker.main import WorkerConfig, run_once
 
 
@@ -44,6 +46,61 @@ def test_api_creates_lists_gets_and_streams_run_events() -> None:
     assert "event: run-event" in body
     assert '"event_type": "run.created"' in body
     assert '"event_type": "run.queued"' in body
+
+
+def test_trace_context_propagates_from_api_to_worker_events() -> None:
+    store = InMemoryRunStore()
+    api_exporter = InMemorySpanExporter()
+    worker_exporter = InMemorySpanExporter()
+    api_observability = build_observability(
+        "agent-harness-api-test",
+        span_exporter=api_exporter,
+        use_batch_processor=False,
+    )
+    worker_observability = build_observability(
+        "agent-harness-worker-test",
+        span_exporter=worker_exporter,
+        use_batch_processor=False,
+    )
+    client = TestClient(create_app(store=store, observability=api_observability))
+
+    try:
+        response = client.post(
+            "/runs",
+            json={
+                "workflow": "demo.echo",
+                "input": "trace me",
+            },
+        )
+        assert response.status_code == 202
+        run = store.get_run(response.json()["run"]["run_id"])
+        assert run is not None
+        assert run.trace_id is not None
+        assert run.traceparent is not None
+
+        did_work = run_once(
+            store,
+            RuntimeExecutor(store, observability=worker_observability),
+            WorkerConfig(poll_interval_seconds=0.0, lease_seconds=30, worker_id="worker-test"),
+            observability=worker_observability,
+        )
+
+        assert did_work is True
+        traced_events = [
+            event
+            for event in store.list_events(run.run_id)
+            if event.event_type in {"workflow.started", "node.started", "tool.started", "model.started"}
+        ]
+        assert traced_events
+        assert all(event.trace_id == run.trace_id for event in traced_events)
+        assert all(event.span_id is not None for event in traced_events)
+        assert worker_exporter.get_finished_spans()
+        assert {span.context.trace_id for span in worker_exporter.get_finished_spans()} == {
+            int(run.trace_id, 16)
+        }
+    finally:
+        client.close()
+        worker_observability.shutdown()
 
 
 def test_worker_executes_queued_runs_and_persists_runtime_events() -> None:
@@ -104,6 +161,31 @@ def test_worker_turns_cancelling_runs_into_cancelled_runs() -> None:
     final_run = store.get_run(run.run_id)
     assert final_run is not None
     assert final_run.status == RunStatus.CANCELLED
+
+
+def test_metrics_endpoint_exposes_run_and_queue_metrics() -> None:
+    store = InMemoryRunStore()
+    observability = build_observability("agent-harness-api-metrics-test")
+    client = TestClient(create_app(store=store, observability=observability))
+
+    try:
+        create_response = client.post(
+            "/runs",
+            json={
+                "workflow": "demo.echo",
+                "input": "measure me",
+            },
+        )
+        assert create_response.status_code == 202
+
+        metrics_response = client.get("/metrics")
+
+        assert metrics_response.status_code == 200
+        assert "agent_harness_runs_created_total" in metrics_response.text
+        assert "agent_harness_queue_depth" in metrics_response.text
+        assert 'workflow="demo.echo"' in metrics_response.text
+    finally:
+        client.close()
 
 
 def test_api_cancel_endpoint_marks_queued_run_as_cancelled() -> None:

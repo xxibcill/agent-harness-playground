@@ -24,6 +24,7 @@ dev = [
     "agent-harness-worker",
     "agent-harness-core",
     "agent-harness-contracts",
+    "agent-harness-observability",
     "fastapi>=0.116.0,<1.0.0",
     "httpx>=0.28.0,<1.0.0",
     "pytest>=8.4.0,<9.0.0",
@@ -38,6 +39,7 @@ members = [
     "apps/worker",
     "packages/agent-core",
     "packages/contracts",
+    "packages/observability",
 ]
 
 [tool.uv.sources]
@@ -45,3 +47,4 @@ agent-harness-api = { workspace = true }
 agent-harness-worker = { workspace = true }
 agent-harness-core = { workspace = true }
 agent-harness-contracts = { workspace = true }
+agent-harness-observability = { workspace = true }

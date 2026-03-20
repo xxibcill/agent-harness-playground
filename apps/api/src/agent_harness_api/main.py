@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+from time import perf_counter
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
@@ -16,15 +18,47 @@ from agent_harness_contracts import (
     RunStatus,
 )
 from agent_harness_core import InMemoryRunStore, RunStore, build_run_store
+from agent_harness_observability import (
+    CorrelationFilter,
+    ServiceObservability,
+    bind_log_context,
+    build_observability,
+    capture_current_trace,
+    start_span,
+)
 
 
-def create_app(store: RunStore | None = None) -> FastAPI:
+def build_logger() -> logging.Logger:
+    logger = logging.getLogger("agent_harness_api")
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s %(levelname)s %(name)s run_id=%(run_id)s trace_id=%(trace_id)s %(message)s"
+            )
+        )
+        handler.addFilter(CorrelationFilter())
+        logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    return logger
+
+
+def create_app(
+    store: RunStore | None = None,
+    observability: ServiceObservability | None = None,
+) -> FastAPI:
     runtime_store = store or build_run_store()
+    telemetry = observability or build_observability("agent-harness-api")
+    logger = build_logger()
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         runtime_store.apply_migrations()
-        yield
+        try:
+            yield
+        finally:
+            telemetry.shutdown()
 
     app = FastAPI(
         title="Agent Harness API",
@@ -33,9 +67,40 @@ def create_app(store: RunStore | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.run_store = runtime_store
+    app.state.observability = telemetry
+    app.mount("/metrics", telemetry.metrics_app())
 
     def get_store() -> RunStore:
         return app.state.run_store
+
+    @app.middleware("http")
+    async def instrument_requests(request, call_next):  # type: ignore[no-untyped-def]
+        route = request.url.path
+        started_at = perf_counter()
+        with start_span(
+            telemetry.tracer,
+            "http.request",
+            attributes={
+                "http.method": request.method,
+                "http.route": route,
+            },
+        ):
+            trace_snapshot = capture_current_trace()
+            with bind_log_context(trace_id=trace_snapshot.trace_id):
+                response = await call_next(request)
+                telemetry.metrics.record_http_request(
+                    method=request.method,
+                    route=route,
+                    status_code=response.status_code,
+                    duration_seconds=perf_counter() - started_at,
+                )
+                logger.info(
+                    "request completed method=%s route=%s status_code=%s",
+                    request.method,
+                    route,
+                    response.status_code,
+                )
+                return response
 
     @app.get("/health")
     def health(runtime_store: RunStore = Depends(get_store)) -> dict[str, str]:
@@ -52,11 +117,17 @@ def create_app(store: RunStore | None = None) -> FastAPI:
         runtime_store: RunStore = Depends(get_store),
     ) -> CreateRunResponse:
         run = runtime_store.create_run(request)
+        telemetry.metrics.record_run_created(run)
+        telemetry.metrics.refresh_queue(runtime_store.list_runs())
+        with bind_log_context(run_id=run.run_id, trace_id=run.trace_id):
+            logger.info("created run workflow=%s", run.workflow)
         return CreateRunResponse(run=run)
 
     @app.get("/runs", response_model=ListRunsResponse)
     def list_runs(runtime_store: RunStore = Depends(get_store)) -> ListRunsResponse:
-        return ListRunsResponse(runs=runtime_store.list_runs())
+        runs = runtime_store.list_runs()
+        telemetry.metrics.refresh_queue(runs)
+        return ListRunsResponse(runs=runs)
 
     @app.get("/runs/{run_id}", response_model=CreateRunResponse)
     def get_run(
@@ -76,6 +147,15 @@ def create_app(store: RunStore | None = None) -> FastAPI:
         run = runtime_store.cancel_run(run_id)
         if run is None:
             raise HTTPException(status_code=404, detail=f"Run {run_id} was not found.")
+        telemetry.metrics.refresh_queue(runtime_store.list_runs())
+        if str(run.status) in {
+            RunStatus.CANCELLED.value,
+            RunStatus.FAILED.value,
+            RunStatus.COMPLETED.value,
+        }:
+            telemetry.metrics.record_run_terminal(run)
+        with bind_log_context(run_id=run.run_id, trace_id=run.trace_id):
+            logger.info("cancelled or marked run for cancellation status=%s", run.status)
         return CancelRunResponse(run=run)
 
     @app.get("/runs/{run_id}/events/stream")

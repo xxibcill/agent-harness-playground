@@ -5,6 +5,7 @@ This package now contains the shared Python runtime contracts used by the API an
 - run lifecycle states
 - run request and response models
 - structured runtime event models
+- trace correlation identifiers for runs and events
 - token usage payloads
 
 It is still the right future home for generated OpenAPI artifacts, TypeScript clients, and JSON schema exports.

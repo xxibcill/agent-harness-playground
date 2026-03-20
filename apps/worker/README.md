@@ -15,3 +15,5 @@ Environment:
 - `AGENT_HARNESS_WORKER_ID`: worker identity recorded on claimed runs
 - `AGENT_HARNESS_WORKER_POLL_SECONDS`: idle polling interval
 - `AGENT_HARNESS_WORKER_LEASE_SECONDS`: lease duration before stale runs can be reclaimed
+- `AGENT_HARNESS_WORKER_METRICS_PORT`: Prometheus scrape port for worker metrics
+- `AGENT_HARNESS_OTEL_EXPORTER_OTLP_ENDPOINT`: base OTLP HTTP endpoint used to ship traces to the collector

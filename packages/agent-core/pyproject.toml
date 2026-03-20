@@ -5,6 +5,7 @@ description = "Shared runtime primitives and workflows for the agent harness pla
 requires-python = ">=3.11"
 dependencies = [
     "agent-harness-contracts",
+    "agent-harness-observability",
     "langgraph>=1.0.10,<2.0.0",
     "psycopg[binary]>=3.2.0,<4.0.0",
 ]

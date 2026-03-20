@@ -12,6 +12,7 @@ Current responsibilities:
 Environment:
 
 - `AGENT_HARNESS_DATABASE_URL`: Postgres connection string used for runtime storage and migrations
+- `AGENT_HARNESS_OTEL_EXPORTER_OTLP_ENDPOINT`: base OTLP HTTP endpoint used to ship traces to the collector
 
 Key endpoints:
 
@@ -20,3 +21,4 @@ Key endpoints:
 - `GET /runs/{run_id}`
 - `POST /runs/{run_id}/cancel`
 - `GET /runs/{run_id}/events/stream`
+- `GET /metrics`
