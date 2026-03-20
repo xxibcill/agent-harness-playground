@@ -1,0 +1,16 @@
+import { proxyRequest } from "../../../../../../lib/server/api-proxy.ts";
+
+type RouteContext = {
+  params: Promise<{
+    runId: string;
+  }>;
+};
+
+export async function GET(request: Request, context: RouteContext): Promise<Response> {
+  const { runId } = await context.params;
+  return proxyRequest({
+    request,
+    path: `/runs/${runId}/events/stream`,
+    requiredRole: "viewer",
+  });
+}

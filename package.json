@@ -5,7 +5,8 @@
   "scripts": {
     "web:dev": "pnpm --dir apps/web dev",
     "web:build": "pnpm --dir apps/web build",
-    "web:start": "pnpm --dir apps/web start"
+    "web:start": "pnpm --dir apps/web start",
+    "web:test": "pnpm --dir apps/web test",
+    "web:typecheck": "pnpm --dir apps/web typecheck"
   }
 }
-

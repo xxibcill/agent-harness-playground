@@ -1,10 +1,13 @@
 {
   "name": "@agent-harness/web",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "test": "node --test --experimental-strip-types test/**/*.test.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "next": "15.2.2",
@@ -18,4 +21,3 @@
     "typescript": "5.8.2"
   }
 }
-
