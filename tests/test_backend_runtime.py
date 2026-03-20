@@ -201,3 +201,18 @@ def test_api_cancel_endpoint_marks_queued_run_as_cancelled() -> None:
     events = [event.model_dump(mode="json") for event in store.list_events(run.run_id)]
     serialized = json.dumps(events)
     assert "run.cancelled" in serialized
+
+
+def test_api_allows_local_nextjs_client_origin() -> None:
+    client = TestClient(create_app(store=InMemoryRunStore()))
+
+    response = client.options(
+        "/runs",
+        headers={
+            "Origin": "http://127.0.0.1:3000",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:3000"

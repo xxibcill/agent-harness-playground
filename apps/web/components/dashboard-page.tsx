@@ -1,0 +1,377 @@
+"use client";
+
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { startTransition, useEffect, useState } from "react";
+
+import { createRun, listRuns } from "../lib/api";
+import type { CreateRunRequest, RunRecord } from "../lib/generated/contracts";
+import {
+  formatDateTime,
+  formatDuration,
+  formatRelativeTime,
+  formatStatusLabel,
+  summarizeRuns,
+} from "../lib/run-helpers";
+
+const defaultMetadata = `{
+  "origin": "web"
+}`;
+
+type LauncherState = {
+  workflow: string;
+  input: string;
+  metadataText: string;
+  scheduledAt: string;
+};
+
+const initialLauncherState: LauncherState = {
+  workflow: "demo.echo",
+  input: "",
+  metadataText: defaultMetadata,
+  scheduledAt: "",
+};
+
+export function DashboardPage() {
+  const router = useRouter();
+  const [runs, setRuns] = useState<RunRecord[]>([]);
+  const [launcher, setLauncher] = useState<LauncherState>(initialLauncherState);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadRuns() {
+      try {
+        const nextRuns = await listRuns();
+        if (!active) {
+          return;
+        }
+        setRuns(nextRuns);
+        setRefreshError(null);
+      } catch (error) {
+        if (!active) {
+          return;
+        }
+        setRefreshError(error instanceof Error ? error.message : "Unable to load runs.");
+      } finally {
+        if (active) {
+          setIsLoading(false);
+        }
+      }
+    }
+
+    void loadRuns();
+    const intervalId = window.setInterval(() => {
+      void loadRuns();
+    }, 4000);
+
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, []);
+
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setFormError(null);
+    setIsSubmitting(true);
+
+    try {
+      const metadata = parseMetadata(launcher.metadataText);
+      const trimmedInput = launcher.input.trim();
+      if (!trimmedInput) {
+        throw new Error("Prompt is required.");
+      }
+      const request: CreateRunRequest = {
+        workflow: launcher.workflow.trim() || "demo.echo",
+        input: trimmedInput,
+        metadata,
+        scheduled_at: launcher.scheduledAt ? new Date(launcher.scheduledAt).toISOString() : null,
+      };
+      const createdRun = await createRun(request);
+      setRuns((currentRuns) => [createdRun, ...currentRuns]);
+      setLauncher(initialLauncherState);
+      startTransition(() => {
+        router.push(`/runs/${createdRun.run_id}`);
+      });
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "Unable to create the run.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  const summary = summarizeRuns(runs);
+  const recentRuns = runs.slice(0, 8);
+  const failureRuns = runs
+    .filter((run) => run.status === "failed" || run.status === "cancelled")
+    .slice(0, 4);
+
+  return (
+    <main className="app-shell">
+      <section className="hero-panel">
+        <div>
+          <p className="eyebrow">Task 04 completed surface</p>
+          <h1>Operator console for live agent runs</h1>
+          <p className="lede">
+            Launch new executions, watch workflow state transitions over SSE, and inspect run
+            history without moving orchestration logic out of the Python services.
+          </p>
+        </div>
+        <div className="hero-meta">
+          <span className="hero-chip">Pure client Next.js</span>
+          <span className="hero-chip">Streaming run updates</span>
+          <span className="hero-chip">Historical detail routes</span>
+        </div>
+      </section>
+
+      <section className="dashboard-grid">
+        <article className="panel launcher-panel">
+          <div className="section-heading">
+            <div>
+              <p className="section-label">Run launcher</p>
+              <h2>Start a new workflow run</h2>
+            </div>
+            <span className="status-chip status-chip--queued">Ready</span>
+          </div>
+          <form className="launcher-form" onSubmit={handleSubmit}>
+            <label className="field">
+              <span>Workflow</span>
+              <select
+                value={launcher.workflow}
+                onChange={(event) =>
+                  setLauncher((current) => ({ ...current, workflow: event.target.value }))
+                }
+              >
+                <option value="demo.echo">demo.echo</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>Prompt</span>
+              <textarea
+                rows={6}
+                placeholder="Summarize the operator signals for this run."
+                value={launcher.input}
+                onChange={(event) =>
+                  setLauncher((current) => ({ ...current, input: event.target.value }))
+                }
+                required
+              />
+            </label>
+            <div className="field-row">
+              <label className="field">
+                <span>Schedule at</span>
+                <input
+                  type="datetime-local"
+                  value={launcher.scheduledAt}
+                  onChange={(event) =>
+                    setLauncher((current) => ({ ...current, scheduledAt: event.target.value }))
+                  }
+                />
+              </label>
+              <label className="field">
+                <span>Config transport</span>
+                <input value="metadata JSON" disabled readOnly />
+              </label>
+            </div>
+            <label className="field">
+              <span>Configuration metadata</span>
+              <textarea
+                rows={7}
+                value={launcher.metadataText}
+                onChange={(event) =>
+                  setLauncher((current) => ({ ...current, metadataText: event.target.value }))
+                }
+              />
+            </label>
+            {formError ? <p className="inline-error">{formError}</p> : null}
+            <button className="primary-button" disabled={isSubmitting} type="submit">
+              {isSubmitting ? "Creating run..." : "Create run"}
+            </button>
+          </form>
+        </article>
+
+        <article className="panel summary-panel">
+          <div className="section-heading">
+            <div>
+              <p className="section-label">Operator metrics</p>
+              <h2>Queue and terminal health</h2>
+            </div>
+            <span className="section-caption">
+              {isLoading ? "Loading..." : `Updated ${formatRelativeTime(new Date().toISOString())}`}
+            </span>
+          </div>
+          <div className="metric-grid">
+            <MetricCard label="Total runs" value={String(summary.totalRuns)} accent="accent" />
+            <MetricCard label="Queued" value={String(summary.queuedRuns)} accent="queued" />
+            <MetricCard label="Active" value={String(summary.activeRuns)} accent="running" />
+            <MetricCard label="Success rate" value={summary.successRate} accent="completed" />
+          </div>
+          <div className="summary-copy">
+            <p>
+              {summary.terminalRuns === 0
+                ? "No terminal runs recorded yet."
+                : `${summary.completedRuns} completed and ${summary.failedRuns} failed or cancelled.`}
+            </p>
+            {refreshError ? <p className="inline-error">{refreshError}</p> : null}
+          </div>
+        </article>
+      </section>
+
+      <section className="dashboard-grid dashboard-grid--wide">
+        <article className="panel table-panel">
+          <div className="section-heading">
+            <div>
+              <p className="section-label">Recent runs</p>
+              <h2>Execution history</h2>
+            </div>
+            <Link className="ghost-link" href="/">
+              Dashboard
+            </Link>
+          </div>
+          {recentRuns.length === 0 ? (
+            <EmptyState
+              title="No runs yet"
+              copy="Create a run to start building history, metrics, and live event data."
+            />
+          ) : (
+            <div className="table-wrap">
+              <table className="run-table">
+                <thead>
+                  <tr>
+                    <th>Run</th>
+                    <th>Status</th>
+                    <th>Workflow</th>
+                    <th>Created</th>
+                    <th>Duration</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {recentRuns.map((run) => (
+                    <tr key={run.run_id}>
+                      <td>
+                        <div className="table-primary">{run.run_id}</div>
+                        <div className="table-secondary">{run.input}</div>
+                      </td>
+                      <td>
+                        <StatusChip status={run.status} />
+                      </td>
+                      <td>{run.workflow}</td>
+                      <td>
+                        <div className="table-primary">{formatDateTime(run.created_at)}</div>
+                        <div className="table-secondary">{formatRelativeTime(run.created_at)}</div>
+                      </td>
+                      <td>{formatDuration(run.started_at, run.completed_at, run.updated_at)}</td>
+                      <td className="table-action">
+                        <Link className="table-link" href={`/runs/${run.run_id}`}>
+                          Inspect
+                        </Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </article>
+
+        <aside className="panel failure-panel">
+          <div className="section-heading">
+            <div>
+              <p className="section-label">Failure inspection</p>
+              <h2>Runs that need attention</h2>
+            </div>
+          </div>
+          {failureRuns.length === 0 ? (
+            <EmptyState
+              title="No failures recorded"
+              copy="The dashboard will surface failed and cancelled runs here with direct links."
+            />
+          ) : (
+            <div className="failure-list">
+              {failureRuns.map((run) => (
+                <article className="failure-card" key={run.run_id}>
+                  <div className="failure-card__header">
+                    <StatusChip status={run.status} />
+                    <span className="table-secondary">{formatRelativeTime(run.updated_at)}</span>
+                  </div>
+                  <h3>{run.run_id}</h3>
+                  <p>{run.error ?? "Cancellation was recorded without an explicit error message."}</p>
+                  <dl className="failure-card__meta">
+                    <div>
+                      <dt>Workflow</dt>
+                      <dd>{run.workflow}</dd>
+                    </div>
+                    <div>
+                      <dt>Attempt</dt>
+                      <dd>{run.attempt_count}</dd>
+                    </div>
+                  </dl>
+                  <Link className="table-link" href={`/runs/${run.run_id}`}>
+                    Open detail view
+                  </Link>
+                </article>
+              ))}
+            </div>
+          )}
+        </aside>
+      </section>
+    </main>
+  );
+}
+
+function parseMetadata(source: string): Record<string, unknown> {
+  if (!source.trim()) {
+    return {};
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(source) as unknown;
+  } catch {
+    throw new Error("Configuration metadata must be valid JSON.");
+  }
+
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+    throw new Error("Configuration metadata must be a JSON object.");
+  }
+
+  return parsed as Record<string, unknown>;
+}
+
+function MetricCard({
+  label,
+  value,
+  accent,
+}: {
+  label: string;
+  value: string;
+  accent: "accent" | "queued" | "running" | "completed";
+}) {
+  return (
+    <article className={`metric-card metric-card--${accent}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </article>
+  );
+}
+
+function StatusChip({ status }: { status: RunRecord["status"] }) {
+  return (
+    <span className={`status-chip status-chip--${status}`}>{formatStatusLabel(status)}</span>
+  );
+}
+
+function EmptyState({ title, copy }: { title: string; copy: string }) {
+  return (
+    <div className="empty-state">
+      <h3>{title}</h3>
+      <p>{copy}</p>
+    </div>
+  );
+}

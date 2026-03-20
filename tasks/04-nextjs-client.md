@@ -1,5 +1,7 @@
 # 04 Next.js Client
 
+Status: completed
+
 ## Goal
 
 Build the frontend as a pure client application for starting runs and monitoring agent execution.

@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from time import perf_counter
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
 from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from agent_harness_contracts import (
@@ -44,6 +46,14 @@ def build_logger() -> logging.Logger:
     return logger
 
 
+def build_cors_origins() -> list[str]:
+    configured = os.getenv(
+        "AGENT_HARNESS_CORS_ORIGINS",
+        "http://127.0.0.1:3000,http://localhost:3000",
+    )
+    return [origin.strip() for origin in configured.split(",") if origin.strip()]
+
+
 def create_app(
     store: RunStore | None = None,
     observability: ServiceObservability | None = None,
@@ -65,6 +75,13 @@ def create_app(
         version="0.2.0",
         summary="Control plane for durable agent runs and runtime events.",
         lifespan=lifespan,
+    )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=build_cors_origins(),
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
     app.state.run_store = runtime_store
     app.state.observability = telemetry
