@@ -52,6 +52,7 @@ files = [
     "packages/agent-core/src",
     "packages/contracts/src",
     "packages/observability/src",
+    "scripts/production_canary.py",
     "tests/test_backend_runtime.py",
     "tests/test_postgres_migrations.py",
 ]

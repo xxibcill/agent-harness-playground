@@ -26,16 +26,13 @@ type ProxyRequestOptions = {
 
 function apiBaseUrl(): string {
   const configuredBaseUrl =
-    process.env.AGENT_HARNESS_API_BASE_URL?.trim() ||
-    process.env.NEXT_PUBLIC_API_BASE_URL?.trim() ||
-    "http://127.0.0.1:8000";
+    process.env.AGENT_HARNESS_API_BASE_URL?.trim() || "http://127.0.0.1:8000";
 
   return configuredBaseUrl.replace(/\/$/, "");
 }
 
 function apiToken(): string | null {
-  const token =
-    process.env.AGENT_HARNESS_API_TOKEN?.trim() || process.env.NEXT_PUBLIC_API_TOKEN?.trim() || "";
+  const token = process.env.AGENT_HARNESS_API_TOKEN?.trim() || "";
   return token ? token : null;
 }
 

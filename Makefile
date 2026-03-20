@@ -1,6 +1,6 @@
-.PYTHON_LINT_PATHS = apps/api/src apps/worker/src packages/agent-core/src packages/contracts/src packages/contracts/scripts tests/test_backend_runtime.py tests/test_postgres_migrations.py
+.PYTHON_LINT_PATHS = apps/api/src apps/worker/src packages/agent-core/src packages/contracts/src packages/contracts/scripts scripts/production_canary.py tests/test_backend_runtime.py tests/test_postgres_migrations.py
 
-.PHONY: install-python install-web lint typecheck-python typecheck-web typecheck test ci dev-api dev-worker dev-web
+.PHONY: install-python install-web lint typecheck-python typecheck-web typecheck test ci dev-api dev-worker dev-web production-canary
 
 install-python:
 	uv sync
@@ -32,3 +32,6 @@ dev-worker:
 
 dev-web:
 	cd apps/web && pnpm dev
+
+production-canary:
+	uv run python scripts/production_canary.py

@@ -26,6 +26,7 @@ from agent_harness_core.workflows import (
     compile_workflow_graph,
 )
 
+
 class ExecutionCancelled(RuntimeError):
     """Raised when a run should stop because cancellation was requested."""
 
@@ -432,7 +433,7 @@ class RuntimeExecutor:
         )
 
     def _build_run_output(self, result: WorkflowState) -> dict[str, Any]:
-        output = {
+        output: dict[str, Any] = {
             "response": result["response"],
             "normalized_input": result["normalized_input"],
         }

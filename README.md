@@ -169,3 +169,9 @@ Release and operations documentation:
 
 - `docs/deployment.md`
 - `docs/operations.md`
+
+Task 10 hardens the shared production path:
+
+- `apps/web` is the only public entry point and proxies runs over same-origin routes
+- workers expose a private `/health` endpoint alongside Prometheus metrics
+- `make production-canary` validates web submission through worker completion

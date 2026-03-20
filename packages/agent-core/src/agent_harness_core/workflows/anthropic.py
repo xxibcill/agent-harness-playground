@@ -12,7 +12,6 @@ from anthropic import Anthropic
 from dotenv import load_dotenv
 
 from agent_harness_core.errors import ConfigurationError, ProviderError
-
 from agent_harness_core.usage_tracker import (
     append_usage_entry,
     build_usage_entry,
@@ -22,6 +21,7 @@ from agent_harness_core.usage_tracker import (
 )
 from agent_harness_core.workflows.demo_echo import normalize_whitespace
 from agent_harness_core.workflows.types import WorkflowDefinition, WorkflowResponse
+
 
 @dataclass(frozen=True)
 class AnthropicWorkflowConfig:
@@ -106,11 +106,13 @@ def create_client(config: AnthropicWorkflowConfig) -> Anthropic:
 
 
 def extract_text(response: anthropic.types.Message) -> str:
-    parts = [
-        block.text.strip()
-        for block in response.content
-        if getattr(block, "type", "") == "text" and getattr(block, "text", "").strip()
-    ]
+    parts: list[str] = []
+    for block in response.content:
+        if getattr(block, "type", "") != "text":
+            continue
+        text = getattr(block, "text", "")
+        if isinstance(text, str) and text.strip():
+            parts.append(text.strip())
     if not parts:
         raise RuntimeError("The Anthropic response did not include any text content.")
     return "\n".join(parts)
@@ -131,26 +133,44 @@ def create_anthropic_workflow(config: AnthropicWorkflowConfig) -> WorkflowDefini
             raise ProviderError(
                 f"Provider rate limit exceeded: {exc}",
                 error_type="rate_limit_error",
-                recovery_hint="Reduce request frequency, add retry logic with exponential backoff, or upgrade your API plan.",
+                recovery_hint=(
+                    "Reduce request frequency, add retry logic with exponential "
+                    "backoff, or upgrade your API plan."
+                ),
             ) from exc
         except anthropic.APIStatusError as exc:
             error_type = "api_status_error"
             recovery_hint = None
 
             if exc.status_code == 401:
-                recovery_hint = "Verify your ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY is valid and not expired."
+                recovery_hint = (
+                    "Verify your ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY "
+                    "is valid and not expired."
+                )
                 error_type = "authentication_error"
             elif exc.status_code == 403:
-                recovery_hint = "Check that your API key has access to the specified model and that model ID is correct."
+                recovery_hint = (
+                    "Check that your API key has access to the specified model "
+                    "and that model ID is correct."
+                )
                 error_type = "permission_error"
             elif exc.status_code == 404:
-                recovery_hint = f"Model '{config.model}' not found. Verify the model ID is correct and available in your region."
+                recovery_hint = (
+                    f"Model '{config.model}' not found. Verify the model ID is "
+                    "correct and available in your region."
+                )
                 error_type = "model_not_found"
             elif exc.status_code == 429:
-                recovery_hint = "Rate limit exceeded. Implement retry logic with exponential backoff or reduce request frequency."
+                recovery_hint = (
+                    "Rate limit exceeded. Implement retry logic with exponential "
+                    "backoff or reduce request frequency."
+                )
                 error_type = "rate_limit_error"
             elif exc.status_code >= 500:
-                recovery_hint = "Provider service error. Retry with exponential backoff. If issue persists, check provider status page."
+                recovery_hint = (
+                    "Provider service error. Retry with exponential backoff. "
+                    "If issue persists, check provider status page."
+                )
                 error_type = "service_error"
 
             raise ProviderError(
@@ -162,19 +182,28 @@ def create_anthropic_workflow(config: AnthropicWorkflowConfig) -> WorkflowDefini
             raise ProviderError(
                 f"Failed to connect to provider: {exc}",
                 error_type="connection_error",
-                recovery_hint="Check network connectivity, verify ANTHROPIC_BASE_URL is correct, and ensure firewall allows outbound connections.",
+                recovery_hint=(
+                    "Check network connectivity, verify ANTHROPIC_BASE_URL "
+                    "is correct, and ensure firewall allows outbound connections."
+                ),
             ) from exc
         except anthropic.APITimeoutError as exc:
             raise ProviderError(
                 f"Provider request timed out after {config.timeout_seconds}s: {exc}",
                 error_type="timeout_error",
-                recovery_hint=f"Increase API_TIMEOUT_MS or client_timeout_seconds in workflow config. Current timeout: {config.timeout_seconds}s.",
+                recovery_hint=(
+                    "Increase API_TIMEOUT_MS or client_timeout_seconds in workflow "
+                    f"config. Current timeout: {config.timeout_seconds}s."
+                ),
             ) from exc
         except anthropic.APIError as exc:
             raise ProviderError(
                 f"Provider request failed: {exc}",
                 error_type="api_error",
-                recovery_hint="Verify your API credentials and model configuration. Check provider status page for service issues.",
+                recovery_hint=(
+                    "Verify your API credentials and model configuration. "
+                    "Check provider status page for service issues."
+                ),
             ) from exc
 
         latency_ms = int((time.perf_counter() - started_at) * 1000)

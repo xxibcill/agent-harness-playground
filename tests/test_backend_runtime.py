@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 from datetime import timedelta
+from typing import Any, cast
+from urllib.request import urlopen
 
 import pytest
 from agent_harness_api.auth import Role, TokenAuthorizer
@@ -24,9 +26,21 @@ from agent_harness_core.workflows import (
 )
 from agent_harness_core.workflows.demo_echo import create_demo_echo_workflow, normalize_whitespace
 from agent_harness_observability import build_observability
-from agent_harness_worker.main import WorkerConfig, run_once
+from agent_harness_worker.main import (
+    WorkerConfig,
+    WorkerHealthMonitor,
+    WorkerHealthServer,
+    run_once,
+)
 from fastapi.testclient import TestClient
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+
+def require_model_output(output: dict[str, Any] | None) -> dict[str, Any]:
+    assert output is not None
+    model_output = output.get("model")
+    assert isinstance(model_output, dict)
+    return cast(dict[str, Any], model_output)
 
 
 def test_api_creates_lists_gets_and_streams_run_events() -> None:
@@ -194,6 +208,7 @@ def test_worker_executes_queued_runs_and_persists_runtime_events() -> None:
     completed = store.get_run(run.run_id)
     assert completed is not None
     assert completed.status == RunStatus.COMPLETED
+    model_output = require_model_output(completed.output)
     assert completed.output == {
         "response": "Echo: hello worker",
         "normalized_input": "hello worker",
@@ -205,7 +220,7 @@ def test_worker_executes_queued_runs_and_persists_runtime_events() -> None:
                 "output_tokens": 3,
                 "total_tokens": 5,
             },
-            "latency_ms": completed.output["model"]["latency_ms"],
+            "latency_ms": model_output["latency_ms"],
             "request_id": "demo-echo",
         },
     }
@@ -227,6 +242,45 @@ def test_worker_executes_queued_runs_and_persists_runtime_events() -> None:
         "workflow.completed",
         "run.completed",
     ]
+
+
+def test_worker_health_endpoint_reports_liveness_and_recent_completion() -> None:
+    store = InMemoryRunStore()
+    run = store.create_run(CreateRunRequest(input="health check"))
+    config = WorkerConfig(
+        poll_interval_seconds=0.0,
+        lease_seconds=30,
+        worker_id="worker-health",
+        health_host="127.0.0.1",
+        health_port=0,
+        health_stale_after_seconds=60.0,
+    )
+    health_monitor = WorkerHealthMonitor(config)
+    health_server = WorkerHealthServer(config, health_monitor)
+    health_server.start()
+
+    try:
+        did_work = run_once(
+            store,
+            RuntimeExecutor(store),
+            config,
+            health_monitor=health_monitor,
+        )
+
+        assert did_work is True
+
+        with urlopen(f"http://127.0.0.1:{health_server.port}/health", timeout=5) as response:
+            payload = json.load(response)
+
+        assert payload["service"] == "worker"
+        assert payload["status"] == "ok"
+        assert payload["worker_id"] == "worker-health"
+        assert payload["current_run_id"] is None
+        assert payload["last_finished_run_id"] == run.run_id
+        assert payload["last_finished_at"] is not None
+        assert payload["seconds_since_heartbeat"] >= 0
+    finally:
+        health_server.stop()
 
 
 def test_workflow_registry_raises_for_unknown_workflows() -> None:
@@ -329,6 +383,7 @@ def test_worker_executes_anthropic_workflow_from_registry(monkeypatch) -> None:
     completed = store.get_run(run.run_id)
     assert completed is not None
     assert completed.status == RunStatus.COMPLETED
+    model_output = require_model_output(completed.output)
     assert completed.output == {
         "response": "Shared model reply",
         "normalized_input": "hello worker",
@@ -340,7 +395,7 @@ def test_worker_executes_anthropic_workflow_from_registry(monkeypatch) -> None:
                 "output_tokens": 3,
                 "total_tokens": 7,
             },
-            "latency_ms": completed.output["model"]["latency_ms"],
+            "latency_ms": model_output["latency_ms"],
             "request_id": "req_worker_1",
         },
     }
@@ -619,6 +674,7 @@ def test_end_to_end_web_submission_through_worker_completion(monkeypatch) -> Non
     completed = store.get_run(run_id)
     assert completed is not None
     assert completed.status == RunStatus.COMPLETED
+    model_output = require_model_output(completed.output)
     assert completed.output == {
         "response": "Model-backed reply",
         "normalized_input": "Test end-to-end execution",
@@ -630,7 +686,7 @@ def test_end_to_end_web_submission_through_worker_completion(monkeypatch) -> Non
                 "output_tokens": 4,
                 "total_tokens": 10,
             },
-            "latency_ms": completed.output["model"]["latency_ms"],
+            "latency_ms": model_output["latency_ms"],
             "request_id": "req_e2e_1",
         },
     }
@@ -667,6 +723,7 @@ def test_demo_workflow_persists_structured_model_output_for_operator_ui() -> Non
     completed = store.get_run(run.run_id)
     assert completed is not None
     assert completed.status == RunStatus.COMPLETED
+    model_output = require_model_output(completed.output)
     assert completed.output == {
         "response": "Echo: hello metrics",
         "normalized_input": "hello metrics",
@@ -678,7 +735,7 @@ def test_demo_workflow_persists_structured_model_output_for_operator_ui() -> Non
                 "output_tokens": 3,
                 "total_tokens": 5,
             },
-            "latency_ms": completed.output["model"]["latency_ms"],
+            "latency_ms": model_output["latency_ms"],
             "request_id": "demo-echo",
         },
     }

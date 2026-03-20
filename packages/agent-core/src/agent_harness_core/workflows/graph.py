@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from langgraph.graph import END, START, StateGraph
 
@@ -12,8 +12,8 @@ def compile_workflow_graph(
     generate_response: Callable[[WorkflowState], WorkflowState],
 ) -> Any:
     graph = StateGraph(WorkflowState)
-    graph.add_node("normalize_input", normalize_input)
-    graph.add_node("generate_response", generate_response)
+    graph.add_node("normalize_input", cast(Any, normalize_input))
+    graph.add_node("generate_response", cast(Any, generate_response))
     graph.add_edge(START, "normalize_input")
     graph.add_edge("normalize_input", "generate_response")
     graph.add_edge("generate_response", END)

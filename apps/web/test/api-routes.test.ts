@@ -42,8 +42,6 @@ function setServerEnv(): void {
   process.env.AGENT_HARNESS_API_BASE_URL = "http://127.0.0.1:8000";
   process.env.AGENT_HARNESS_API_TOKEN = "server-token";
   process.env.AGENT_HARNESS_WEB_TRUSTED_PROXY_SECRET = "proxy-secret";
-  delete process.env.NEXT_PUBLIC_API_BASE_URL;
-  delete process.env.NEXT_PUBLIC_API_TOKEN;
   delete process.env.AGENT_HARNESS_WEB_DEV_ROLE;
 }
 
@@ -121,6 +119,32 @@ test("run detail proxy uses the local development fallback when trusted proxy mo
   const forwardedHeaders = fetchCalls[0].init?.headers as Headers;
   assert.equal(forwardedHeaders.get("x-agent-harness-session-source"), "development");
   assert.equal(forwardedHeaders.get("x-agent-harness-session-role"), "admin");
+});
+
+test("proxy ignores browser-exposed NEXT_PUBLIC API credentials", async () => {
+  delete process.env.AGENT_HARNESS_API_BASE_URL;
+  delete process.env.AGENT_HARNESS_API_TOKEN;
+  process.env.NEXT_PUBLIC_API_BASE_URL = "https://public-api.example.com";
+  process.env.NEXT_PUBLIC_API_TOKEN = "browser-visible-token";
+
+  installFetchStub(() =>
+    Response.json({
+      runs: [{ run_id: "run-123", status: "queued" }],
+    }),
+  );
+
+  const response = await listRuns(
+    new Request("http://localhost:3000/api/runs", {
+      headers: createTrustedProxyHeaders({ role: "viewer" }),
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(fetchCalls.length, 1);
+  assert.equal(fetchCalls[0].input, "http://127.0.0.1:8000/runs");
+
+  const forwardedHeaders = fetchCalls[0].init?.headers as Headers;
+  assert.equal(forwardedHeaders.get("authorization"), null);
 });
 
 test("cancel route forwards request bodies and methods with operator auth", async () => {

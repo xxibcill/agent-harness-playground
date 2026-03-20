@@ -15,3 +15,7 @@ Environment:
 The browser now calls same-origin `/api/runs` routes. Next.js proxies those requests to the FastAPI
 service with server-side credentials, and trusted proxy mode can enforce an upstream operator
 identity boundary without exposing raw backend tokens to the browser.
+
+Production note:
+
+- The web proxy reads only server-side `AGENT_HARNESS_*` API settings. Browser-visible `NEXT_PUBLIC_*` API credentials are intentionally ignored.
