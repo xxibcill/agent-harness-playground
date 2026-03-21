@@ -83,7 +83,17 @@ class RuntimeExecutor:
                         run.run_id,
                         event_type="workflow.started",
                         category="workflow",
-                        payload={"workflow": run.workflow},
+                        payload={
+                            "workflow": run.workflow,
+                            "attempt_count": run.attempt_count,
+                            "max_attempts": run.max_attempts,
+                            "timeout_seconds": run.timeout_seconds,
+                            "input_summary": self._summarize_text(run.input),
+                            "workflow_config": run.workflow_config.model_dump(
+                                mode="json",
+                                exclude_none=True,
+                            ),
+                        },
                     )
                     result = self._invoke_workflow_graph(run, deadline)
                     self._assert_active(run.run_id, deadline)
@@ -91,7 +101,12 @@ class RuntimeExecutor:
                         run.run_id,
                         event_type="workflow.completed",
                         category="workflow",
-                        payload={"workflow": run.workflow},
+                        payload={
+                            "workflow": run.workflow,
+                            "attempt_count": run.attempt_count,
+                            "output_summary": self._summarize_text(result["response"]),
+                            "state_summary": self._summarize_state(result),
+                        },
                     )
                 completed_run = self._store.mark_run_completed(
                     run.run_id,
@@ -141,6 +156,7 @@ class RuntimeExecutor:
             return self._run_node(
                 run,
                 node_name="normalize_input",
+                state=state,
                 body=lambda: self._normalize_input_value(run, workflow, state),
             )
 
@@ -153,6 +169,7 @@ class RuntimeExecutor:
             return self._run_node(
                 run,
                 node_name="generate_response",
+                state=state,
                 body=lambda: self._generate_response_value(run, workflow, state),
             )
 
@@ -163,6 +180,7 @@ class RuntimeExecutor:
         run: RunRecord,
         *,
         node_name: str,
+        state: WorkflowState,
         body: Callable[[], WorkflowState],
     ) -> WorkflowState:
         deadline = self._build_deadline(run)
@@ -184,7 +202,10 @@ class RuntimeExecutor:
                     event_type="node.started",
                     category="node",
                     node_name=node_name,
-                    payload={},
+                    payload={
+                        "attempt_count": run.attempt_count,
+                        "state_summary": self._summarize_state(state),
+                    },
                 )
                 self._assert_active(run.run_id, deadline)
                 next_state = body()
@@ -194,7 +215,7 @@ class RuntimeExecutor:
                     event_type="node.completed",
                     category="node",
                     node_name=node_name,
-                    payload=self._build_node_completed_payload(next_state),
+                    payload=self._build_node_completed_payload(state, next_state),
                 )
                 return next_state
         except Exception:
@@ -237,7 +258,10 @@ class RuntimeExecutor:
                     category="tool",
                     node_name="normalize_input",
                     tool_name=tool_name,
-                    payload={},
+                    payload={
+                        "attempt_count": run.attempt_count,
+                        "input_summary": self._summarize_text(state["user_input"]),
+                    },
                 )
                 self._assert_active(run.run_id, deadline)
                 normalized_input = workflow.normalize_input(state["user_input"])
@@ -248,7 +272,12 @@ class RuntimeExecutor:
                     category="tool",
                     node_name="normalize_input",
                     tool_name=tool_name,
-                    payload={"normalized_input": normalized_input},
+                    payload={
+                        "normalized_input": normalized_input,
+                        "input_summary": self._summarize_text(state["user_input"]),
+                        "output_summary": self._summarize_text(normalized_input),
+                        "changed": normalized_input != state["user_input"],
+                    },
                 )
                 return {
                     **state,
@@ -302,7 +331,9 @@ class RuntimeExecutor:
                     model_name=model_name,
                     payload={
                         "input": state["normalized_input"],
+                        "input_summary": self._summarize_text(state["normalized_input"]),
                         "provider": provider,
+                        "attempt_count": run.attempt_count,
                     },
                 )
                 self._assert_active(run.run_id, deadline)
@@ -325,6 +356,7 @@ class RuntimeExecutor:
                 )
                 payload: dict[str, Any] = {
                     "response": response,
+                    "response_summary": self._summarize_text(response),
                     **model_output,
                 }
                 self._store.append_event(
@@ -441,15 +473,63 @@ class RuntimeExecutor:
             output["model"] = result["model_output"]
         return output
 
-    def _build_node_completed_payload(self, state: WorkflowState) -> dict[str, Any]:
+    def _build_node_completed_payload(
+        self, previous_state: WorkflowState, next_state: WorkflowState
+    ) -> dict[str, Any]:
         payload = {
             key: value
-            for key, value in state.items()
+            for key, value in next_state.items()
             if key not in {"user_input", "model_output"}
         }
-        if state.get("model_output") is not None:
-            payload["model"] = state["model_output"]
+        payload["state_summary"] = self._summarize_state(next_state)
+        payload["state_diff"] = self._build_state_diff(previous_state, next_state)
+        if next_state.get("model_output") is not None:
+            payload["model"] = next_state["model_output"]
         return payload
+
+    def _summarize_state(self, state: WorkflowState) -> dict[str, Any]:
+        return {
+            key: self._summarize_value(value)
+            for key, value in state.items()
+            if value not in (None, "")
+        }
+
+    def _build_state_diff(
+        self, previous_state: WorkflowState, next_state: WorkflowState
+    ) -> dict[str, list[str]]:
+        previous_keys = set(previous_state)
+        next_keys = set(next_state)
+        return {
+            "added": sorted(next_keys - previous_keys),
+            "removed": sorted(previous_keys - next_keys),
+            "updated": sorted(
+                key for key in previous_keys & next_keys if previous_state[key] != next_state[key]
+            ),
+        }
+
+    def _summarize_value(self, value: Any) -> Any:
+        if isinstance(value, str):
+            return self._summarize_text(value)
+        if isinstance(value, dict):
+            return {
+                "type": "object",
+                "keys": sorted(str(key) for key in value),
+            }
+        if isinstance(value, list):
+            return {
+                "type": "array",
+                "length": len(value),
+            }
+        return value
+
+    def _summarize_text(self, value: str, *, limit: int = 160) -> dict[str, Any]:
+        preview = value if len(value) <= limit else f"{value[: limit - 3]}..."
+        return {
+            "preview": preview,
+            "chars": len(value),
+            "words": len(value.split()),
+            "truncated": len(preview) != len(value),
+        }
 
     def _append_model_failed_event(
         self,

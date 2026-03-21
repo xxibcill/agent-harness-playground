@@ -243,6 +243,83 @@ def test_worker_executes_queued_runs_and_persists_runtime_events() -> None:
         "run.completed",
     ]
 
+    events_by_type = {event.event_type: event for event in store.list_events(run.run_id)}
+
+    assert events_by_type["workflow.started"].payload == {
+        "workflow": "demo.echo",
+        "attempt_count": 1,
+        "max_attempts": 3,
+        "timeout_seconds": 300,
+        "input_summary": {
+            "preview": "  hello    worker  ",
+            "chars": 19,
+            "words": 2,
+            "truncated": False,
+        },
+        "workflow_config": {},
+    }
+    assert events_by_type["node.started"].payload["state_summary"]["user_input"] == {
+        "preview": "  hello    worker  ",
+        "chars": 19,
+        "words": 2,
+        "truncated": False,
+    }
+    assert events_by_type["tool.completed"].payload == {
+        "normalized_input": "hello worker",
+        "input_summary": {
+            "preview": "  hello    worker  ",
+            "chars": 19,
+            "words": 2,
+            "truncated": False,
+        },
+        "output_summary": {
+            "preview": "hello worker",
+            "chars": 12,
+            "words": 2,
+            "truncated": False,
+        },
+        "changed": True,
+    }
+    assert events_by_type["model.started"].payload == {
+        "input": "hello worker",
+        "input_summary": {
+            "preview": "hello worker",
+            "chars": 12,
+            "words": 2,
+            "truncated": False,
+        },
+        "provider": "demo",
+        "attempt_count": 1,
+    }
+    assert events_by_type["model.completed"].payload["response_summary"] == {
+        "preview": "Echo: hello worker",
+        "chars": 18,
+        "words": 3,
+        "truncated": False,
+    }
+    assert events_by_type["workflow.completed"].payload["state_summary"]["response"] == {
+        "preview": "Echo: hello worker",
+        "chars": 18,
+        "words": 3,
+        "truncated": False,
+    }
+
+    node_completed_events = [
+        event
+        for event in store.list_events(run.run_id)
+        if event.event_type == "node.completed"
+    ]
+    assert node_completed_events[0].payload["state_diff"] == {
+        "added": [],
+        "removed": [],
+        "updated": ["normalized_input"],
+    }
+    assert node_completed_events[1].payload["state_diff"] == {
+        "added": [],
+        "removed": [],
+        "updated": ["model_output", "response"],
+    }
+
 
 def test_worker_health_endpoint_reports_liveness_and_recent_completion() -> None:
     store = InMemoryRunStore()
