@@ -8,6 +8,7 @@ from agent_harness_contracts import RunRecord
 
 from agent_harness_core.workflows.anthropic import build_anthropic_workflow
 from agent_harness_core.workflows.demo_echo import create_demo_echo_workflow
+from agent_harness_core.workflows.react import create_demo_react_workflow
 from agent_harness_core.workflows.types import WorkflowDefinition
 
 
@@ -38,6 +39,7 @@ def build_default_workflow_registry() -> WorkflowRegistry:
     return WorkflowRegistry(
         {
             "demo.echo": create_demo_echo_workflow(),
+            "demo.react": create_demo_react_workflow(),
             "anthropic.respond": build_anthropic_workflow,
         }
     )

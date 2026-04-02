@@ -321,6 +321,103 @@ def test_worker_executes_queued_runs_and_persists_runtime_events() -> None:
     }
 
 
+def test_worker_executes_basic_react_workflow_with_tool_loop() -> None:
+    store = InMemoryRunStore()
+    run = store.create_run(
+        CreateRunRequest(
+            workflow="demo.react",
+            input="calculate 2 + 3 * 4",
+        )
+    )
+
+    did_work = run_once(
+        store,
+        RuntimeExecutor(store),
+        WorkerConfig(poll_interval_seconds=0.0, lease_seconds=30, worker_id="worker-test"),
+    )
+
+    assert did_work is True
+
+    completed = store.get_run(run.run_id)
+    assert completed is not None
+    assert completed.status == RunStatus.COMPLETED
+    assert completed.output == {
+        "response": "I used calculator on 2 + 3 * 4 and got 14.",
+        "normalized_input": "calculate 2 + 3 * 4",
+        "tool_output": "14",
+        "thought": "I observed the tool result and can answer now.",
+        "tool_history": [
+            {
+                "tool_name": "calculator",
+                "tool_input": "2 + 3 * 4",
+                "tool_output": "14",
+            }
+        ],
+        "tool_calls": 1,
+    }
+
+    events = store.list_events(run.run_id)
+    event_types = [event.event_type for event in events]
+    assert event_types == [
+        "run.created",
+        "run.queued",
+        "run.started",
+        "workflow.started",
+        "node.started",
+        "tool.started",
+        "tool.completed",
+        "node.completed",
+        "node.started",
+        "node.completed",
+        "node.started",
+        "tool.started",
+        "tool.completed",
+        "node.completed",
+        "node.started",
+        "node.completed",
+        "node.started",
+        "node.completed",
+        "workflow.completed",
+        "run.completed",
+    ]
+
+    reason_events = [
+        event
+        for event in events
+        if event.event_type == "node.completed" and event.node_name == "reason"
+    ]
+    assert len(reason_events) == 2
+    assert reason_events[0].payload["selected_tool"] == "calculator"
+    assert reason_events[0].payload["tool_input"] == "2 + 3 * 4"
+    assert reason_events[1].payload["thought"] == "I observed the tool result and can answer now."
+
+    use_tool_started = next(
+        event
+        for event in events
+        if event.event_type == "tool.started" and event.node_name == "use_tool"
+    )
+    assert use_tool_started.tool_name == "calculator"
+    assert use_tool_started.payload["input_summary"] == {
+        "preview": "2 + 3 * 4",
+        "chars": 9,
+        "words": 5,
+        "truncated": False,
+    }
+
+    use_tool_completed = next(
+        event
+        for event in events
+        if event.event_type == "tool.completed" and event.node_name == "use_tool"
+    )
+    assert use_tool_completed.tool_name == "calculator"
+    assert use_tool_completed.payload["output_summary"] == {
+        "preview": "14",
+        "chars": 2,
+        "words": 1,
+        "truncated": False,
+    }
+
+
 def test_worker_health_endpoint_reports_liveness_and_recent_completion() -> None:
     store = InMemoryRunStore()
     run = store.create_run(CreateRunRequest(input="health check"))
