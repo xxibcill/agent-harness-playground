@@ -14,9 +14,10 @@ The repo still includes roadmap documents and a few legacy configuration leftove
 
 ## What Runs Today
 
-The current platform supports two workflows:
+The current platform supports three workflows:
 
 - `demo.echo`: normalizes whitespace and returns `Echo: <input>` without calling an external model
+- `demo.react`: runs a basic ReAct loop with local planner/tool steps before producing a response
 - `anthropic.respond`: calls an Anthropic-compatible `messages.create(...)` endpoint from the worker
 
 Runs are durable. The API writes them to Postgres, the worker claims them with a lease, execution emits structured events, and the web app renders both historical state and live updates.

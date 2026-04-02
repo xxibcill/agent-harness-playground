@@ -135,6 +135,12 @@ export function DashboardPage() {
     .filter((run) => run.status === "failed" || run.status === "cancelled")
     .slice(0, 4);
   const isModelWorkflow = launcher.workflow === "anthropic.respond";
+  const workflowHint =
+    launcher.workflow === "anthropic.respond"
+      ? "Model-backed workflow using Claude. Ensure ANTHROPIC_AUTH_TOKEN is configured."
+      : launcher.workflow === "demo.react"
+        ? "Basic ReAct loop that plans, uses local tools, observes the result, and then answers."
+        : "Demo workflow that echoes input. Useful for testing without API keys.";
 
   return (
     <main className="app-shell">
@@ -173,13 +179,10 @@ export function DashboardPage() {
                 }
               >
                 <option value="demo.echo">demo.echo (Demo mode - no API required)</option>
+                <option value="demo.react">demo.react (Basic ReAct loop with local tools)</option>
                 <option value="anthropic.respond">anthropic.respond (Anthropic Claude - requires API key)</option>
               </select>
-              <span className="field-hint">
-                {launcher.workflow === "anthropic.respond"
-                  ? "Model-backed workflow using Claude. Ensure ANTHROPIC_AUTH_TOKEN is configured."
-                  : "Demo workflow that echoes input. Useful for testing without API keys."}
-              </span>
+              <span className="field-hint">{workflowHint}</span>
             </label>
             <label className="field">
               <span>Prompt</span>
