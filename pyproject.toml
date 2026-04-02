@@ -1,21 +1,19 @@
 [project]
-name = "basic-langgraph-agent"
+name = "agent-harness-playground"
 version = "0.1.0"
-description = "Minimal LangGraph project for a first runnable agent."
+description = "Workspace root for the agent harness playground monorepo."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "agent-harness-core",
 ]
 
-[project.scripts]
-basic-agent = "basic_langgraph_agent.agent:main"
-basic-tool-agent = "basic_langgraph_agent.tool_agent:main"
-basic-agent-usage = "basic_langgraph_agent.usage_tracker:main"
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_harness_playground"]
 
 [dependency-groups]
 dev = [

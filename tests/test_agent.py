@@ -4,16 +4,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
-from agent_harness_core.workflows import (
-    AnthropicWorkflowConfig,
-    ConfigurationError,
-    create_anthropic_workflow,
-    load_config,
-)
-
-from basic_langgraph_agent.agent import AgentConfig, build_graph, create_responder
-from basic_langgraph_agent.tool_agent import build_tool_agent_graph
-from basic_langgraph_agent.usage_tracker import (
+from agent_harness_core.usage_tracker import (
     AverageTpm,
     UsageEntry,
     append_usage_entry,
@@ -23,74 +14,33 @@ from basic_langgraph_agent.usage_tracker import (
     format_usage_report,
     read_usage_entries,
 )
+from agent_harness_core.workflows import (
+    AnthropicWorkflowConfig,
+    ConfigurationError,
+    WorkflowDefinition,
+    WorkflowResponse,
+    build_workflow_graph,
+    create_anthropic_workflow,
+    load_config,
+)
 
 
-def test_basic_agent_returns_a_response() -> None:
-    graph = build_graph(lambda user_input: f"Echo: {user_input}")
+def test_build_workflow_graph_returns_a_response() -> None:
+    workflow = WorkflowDefinition(
+        name="test.workflow",
+        normalize_input=lambda user_input: user_input.strip(),
+        generate_response=lambda normalized_input: WorkflowResponse(
+            response=f"Echo: {normalized_input}",
+            model_name="test-model",
+        ),
+        model_name_hint="test-model",
+    )
+    graph = build_workflow_graph(workflow)
 
     result = graph.invoke({"user_input": "Test run", "normalized_input": "", "response": ""})
 
     assert result["normalized_input"] == "Test run"
     assert result["response"] == "Echo: Test run"
-
-
-def test_tool_agent_uses_calculator_tool() -> None:
-    graph = build_tool_agent_graph()
-
-    result = graph.invoke(
-        {
-            "user_input": "calculate 2 + 3 * 4",
-            "normalized_input": "",
-            "selected_tool": None,
-            "tool_input": None,
-            "tool_output": None,
-            "response": "",
-        }
-    )
-
-    assert result["selected_tool"] == "calculator"
-    assert result["tool_input"] == "2 + 3 * 4"
-    assert result["tool_output"] == "14"
-    assert result["response"] == "I used calculator on 2 + 3 * 4 and got 14."
-
-
-def test_tool_agent_uses_lookup_tool() -> None:
-    graph = build_tool_agent_graph()
-
-    result = graph.invoke(
-        {
-            "user_input": "What is the capital of Japan?",
-            "normalized_input": "",
-            "selected_tool": None,
-            "tool_input": None,
-            "tool_output": None,
-            "response": "",
-        }
-    )
-
-    assert result["selected_tool"] == "lookup_capital"
-    assert result["tool_input"] == "Japan"
-    assert result["tool_output"] == "Tokyo"
-    assert result["response"] == "I used lookup_capital and found: Japan -> Tokyo."
-
-
-def test_tool_agent_can_fall_back_without_tool() -> None:
-    graph = build_tool_agent_graph()
-
-    result = graph.invoke(
-        {
-            "user_input": "say hello to the team",
-            "normalized_input": "",
-            "selected_tool": None,
-            "tool_input": None,
-            "tool_output": None,
-            "response": "",
-        }
-    )
-
-    assert result["selected_tool"] is None
-    assert result["tool_output"] is None
-    assert result["response"] == "I did not need a tool. Echo: say hello to the team"
 
 
 def test_load_config_reads_custom_anthropic_env(monkeypatch) -> None:
@@ -101,7 +51,7 @@ def test_load_config_reads_custom_anthropic_env(monkeypatch) -> None:
 
     config = load_config("provider-model")
 
-    assert config == AgentConfig(
+    assert config == AnthropicWorkflowConfig(
         api_key="test-token",
         model="provider-model",
         base_url="https://api.z.ai/api/anthropic",
@@ -120,7 +70,9 @@ def test_load_config_fails_fast_when_api_key_is_missing(monkeypatch) -> None:
         load_config()
 
 
-def test_create_responder_returns_text_from_anthropic_message(monkeypatch, capsys) -> None:
+def test_create_anthropic_workflow_returns_text_from_anthropic_message(
+    monkeypatch, capsys
+) -> None:
     captured_entry = {}
 
     class FakeMessages:
@@ -155,7 +107,7 @@ def test_create_responder_returns_text_from_anthropic_message(monkeypatch, capsy
         lambda: [captured_entry["entry"]],
     )
 
-    responder = create_responder(
+    workflow = create_anthropic_workflow(
         AnthropicWorkflowConfig(
             api_key="test-token",
             model="provider-model",
@@ -165,7 +117,9 @@ def test_create_responder_returns_text_from_anthropic_message(monkeypatch, capsy
         )
     )
 
-    assert responder("hello") == "First line\nSecond line"
+    response = workflow.generate_response("hello")
+
+    assert response.response == "First line\nSecond line"
     assert captured_entry["entry"].total_tokens == 18
     output = capsys.readouterr().out
     assert "input tokens: 11" in output
@@ -217,9 +171,7 @@ def test_create_anthropic_workflow_normalizes_before_request(monkeypatch) -> Non
             max_tokens=128,
         )
     )
-    graph = build_graph(
-        lambda user_input: workflow.generate_response(user_input).response
-    )
+    graph = build_workflow_graph(workflow)
 
     result = graph.invoke(
         {"user_input": "  hello   workflow  ", "normalized_input": "", "response": ""}

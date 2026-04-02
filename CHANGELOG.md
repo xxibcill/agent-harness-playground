@@ -6,7 +6,13 @@ This changelog was initialized from the milestone documents in [`tasks/`](/Users
 
 ## Unreleased
 
-- No unreleased changes documented yet.
+### Removed
+
+- Deleted the legacy root CLI prototype and its console script entrypoints.
+
+### Changed
+
+- Retargeted root package metadata, docs, and tests to the current `agent-core` workflow surface.
 
 ## Milestone 05 - Hardening and Release
 

@@ -8,9 +8,8 @@ Today it contains:
 - a Python worker that claims queued runs from Postgres and executes workflows
 - a Next.js operator console that launches runs and follows them over SSE
 - shared Python packages for runtime logic, contracts, and observability
-- a legacy CLI prototype in `src/basic_langgraph_agent/` that still works and is still tested
 
-The repo still includes roadmap documents and a few legacy configuration leftovers, so this README is intentionally focused on what the code does now.
+The repo still includes roadmap documents and a few historical notes, so this README is intentionally focused on what the code does now.
 
 ## What Runs Today
 
@@ -73,12 +72,10 @@ packages/
   observability/    OTEL, Prometheus, logging correlation helpers
 scripts/
   production_canary.py
-src/
-  basic_langgraph_agent/  Legacy CLI prototype
 tasks/
   Milestone docs and roadmap history
 tests/
-  Python tests for legacy CLI and current backend runtime
+  Python tests for current backend runtime and workflow helpers
 ```
 
 ## Service And Package Guide
@@ -163,7 +160,7 @@ Key pieces:
 - `workflows/registry.py`: workflow registration
 - `workflows/demo_echo.py`: demo workflow
 - `workflows/anthropic.py`: Anthropic-compatible workflow and provider config loading
-- `usage_tracker.py`: JSONL token usage helpers used by the legacy CLI and Anthropic workflow
+- `usage_tracker.py`: JSONL token usage helpers used by the Anthropic workflow
 
 ### `packages/contracts`
 
@@ -413,9 +410,7 @@ Useful direct commands:
 uv run pytest
 pnpm --dir apps/web test
 pnpm --dir apps/web build
-uv run basic-agent --model "your-model" "Say hello"
-uv run basic-tool-agent "What is the capital of Japan?"
-uv run basic-agent-usage
+uv run python -m agent_harness_core.usage_tracker
 ```
 
 ## Testing
@@ -424,7 +419,7 @@ The test surface is split by runtime:
 
 - `tests/test_backend_runtime.py`: current API, worker, workflows, auth, traces, retries, health
 - `tests/test_postgres_migrations.py`: Postgres-backed migration coverage
-- `tests/test_agent.py`: legacy CLI prototype and usage-tracker behavior
+- `tests/test_agent.py`: workflow graph, Anthropic config, and usage-tracker behavior
 - `apps/web/test/api-routes.test.ts`: Next.js proxy route behavior
 
 Notes:
@@ -433,11 +428,7 @@ Notes:
 - web tests are separate: `pnpm --dir apps/web test`
 - Postgres migration tests require `AGENT_HARNESS_TEST_DATABASE_URL`
 
-## Legacy Versus Current Code
-
-The repo contains two layers of history:
-
-### Current runtime path
+## Current Code Paths
 
 Use these first if you want to understand the system as it exists now:
 
@@ -447,16 +438,6 @@ Use these first if you want to understand the system as it exists now:
 - `packages/agent-core`
 - `packages/contracts`
 - `packages/observability`
-
-### Legacy prototype path
-
-These files are still runnable and still tested, but they are no longer the main architecture:
-
-- `src/basic_langgraph_agent/agent.py`
-- `src/basic_langgraph_agent/tool_agent.py`
-- `src/basic_langgraph_agent/usage_tracker.py`
-
-The legacy CLI now delegates much of its provider logic to code in `packages/agent-core`.
 
 ## Docs Worth Reading Next
 
