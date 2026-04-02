@@ -11,6 +11,79 @@ Today it contains:
 
 The repo still includes roadmap documents and a few historical notes, so this README is intentionally focused on what the code does now.
 
+## Quick Start
+
+If you only want to get the project running locally, use this path.
+
+### 1. Install the required tools
+
+- Python 3.11+
+- `uv`
+- Node.js compatible with Next 15
+- `pnpm`
+- Docker
+
+### 2. Install dependencies
+
+```bash
+make install
+```
+
+### 3. Start the full local stack
+
+```bash
+make dev
+```
+
+That target:
+
+- starts Postgres and the local observability stack with Docker
+- starts the FastAPI API on `http://127.0.0.1:8000`
+- starts the worker
+- starts the Next.js app on `http://127.0.0.1:3000`
+
+### 4. Open the app
+
+- Web UI: `http://127.0.0.1:3000`
+- Grafana: `http://127.0.0.1:3001`
+
+### 5. Verify the happy path
+
+1. Open the dashboard in the web UI.
+2. Create a run with the `demo.echo` workflow.
+3. Enter any prompt and submit it.
+4. Open the run details page and confirm that live events appear.
+
+`demo.echo` does not require any external API keys, so it is the fastest way to confirm the project is working.
+
+### Optional: enable auth locally
+
+You do not need auth tokens for the default local setup. If `AGENT_HARNESS_API_TOKENS` is unset, the API runs in no-auth mode and the web app uses its development session.
+
+If you want to test the token-based path locally, export these before `make dev`:
+
+```bash
+export AGENT_HARNESS_API_TOKENS=local-dev-token=operator
+export AGENT_HARNESS_API_TOKEN=local-dev-token
+```
+
+### Optional: enable the Anthropic workflow
+
+The `anthropic.respond` workflow needs provider credentials. Export these before `make dev`:
+
+```bash
+export ANTHROPIC_AUTH_TOKEN=your-token
+export ANTHROPIC_MODEL=your-model-id
+```
+
+### Stop everything
+
+Press `Ctrl-C` in the `make dev` terminal, then shut down Docker services:
+
+```bash
+make infra-down
+```
+
 ## What Runs Today
 
 The current platform supports three workflows:
@@ -276,79 +349,12 @@ The worker, not the browser or web app, owns the provider credentials.
 
 ## Local Development
 
-### Prerequisites
-
-- Python 3.11+
-- `uv`
-- Node.js compatible with Next 15
-- `pnpm`
-- Docker
-
-### Infrastructure
-
-Start the local data and observability stack:
-
-```bash
-docker compose -f infra/docker/compose.yml up -d
-```
-
-That compose file currently includes:
-
-- Postgres
-- Tempo
-- OTEL Collector
-- Prometheus
-- Grafana
-- Redis
-
-Important note: Redis is present in the compose stack but the current runtime does not use it yet. The queue is implemented directly in Postgres.
-
-### Environment variables
-
-Most runtime config is read from process environment.
-
-Common variables:
-
-- `AGENT_HARNESS_DATABASE_URL`
-- `AGENT_HARNESS_API_TOKENS`
-- `AGENT_HARNESS_OTEL_EXPORTER_OTLP_ENDPOINT`
-- `AGENT_HARNESS_CORS_ORIGINS`
-- `AGENT_HARNESS_WORKER_ID`
-- `AGENT_HARNESS_WORKER_POLL_SECONDS`
-- `AGENT_HARNESS_WORKER_LEASE_SECONDS`
-- `AGENT_HARNESS_WORKER_LEASE_REFRESH_SECONDS`
-- `AGENT_HARNESS_WORKER_RETRY_BACKOFF_SECONDS`
-- `AGENT_HARNESS_WORKER_METRICS_PORT`
-- `AGENT_HARNESS_WORKER_HEALTH_HOST`
-- `AGENT_HARNESS_WORKER_HEALTH_PORT`
-- `AGENT_HARNESS_WORKER_HEALTH_STALE_SECONDS`
-- `AGENT_HARNESS_API_BASE_URL`
-- `AGENT_HARNESS_API_TOKEN`
-- `AGENT_HARNESS_WEB_TRUSTED_PROXY_SECRET`
-- `AGENT_HARNESS_WEB_DEV_ROLE`
-- `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_API_KEY`
-- `ANTHROPIC_MODEL`
-- `ANTHROPIC_MAX_TOKENS`
-- `ANTHROPIC_BASE_URL`
-- `API_TIMEOUT_MS`
-
-Important note about config drift:
-
-- `.env.example` still contains legacy `NEXT_PUBLIC_API_BASE_URL` and `NEXT_PUBLIC_API_TOKEN` entries
-- the current web server code does not use those variables
-- the actual web proxy reads `AGENT_HARNESS_API_BASE_URL` and `AGENT_HARNESS_API_TOKEN`
-
-Also note:
-
-- the Python services do not automatically load `.env` on startup
-- the Anthropic workflow helper loads the project `.env` opportunistically for provider config
-- for local service startup, export env vars in your shell or use your own env loader
+Use `make dev` if you want the quickest setup. Use the steps below if you want to run services separately or override the defaults.
 
 ### Install
 
 ```bash
-make install-python
-make install-web
+make install
 ```
 
 Equivalent commands:
@@ -358,7 +364,53 @@ uv sync
 cd apps/web && pnpm install
 ```
 
-### Start the stack
+### Start infrastructure only
+
+```bash
+make infra-up
+```
+
+That stack includes:
+
+- Postgres
+- Tempo
+- OTEL Collector
+- Prometheus
+- Grafana
+- Redis
+
+Redis is present in the compose file but the current runtime still uses Postgres directly for queueing.
+
+### Minimal local configuration
+
+For the default local setup, you usually do not need to export anything:
+
+- Postgres defaults to `postgresql://agent_harness:agent_harness@127.0.0.1:5432/agent_harness`
+- the web app defaults to `http://127.0.0.1:8000` for the API
+- the API falls back to no-auth mode if `AGENT_HARNESS_API_TOKENS` is unset
+- the web app falls back to a local `admin` development session if trusted proxy mode is off
+
+Useful variables when you do want to override behavior:
+
+- `AGENT_HARNESS_DATABASE_URL`
+- `AGENT_HARNESS_API_BASE_URL`
+- `AGENT_HARNESS_API_TOKENS`
+- `AGENT_HARNESS_API_TOKEN`
+- `AGENT_HARNESS_WEB_TRUSTED_PROXY_SECRET`
+- `AGENT_HARNESS_WEB_DEV_ROLE`
+- `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_API_KEY`
+- `ANTHROPIC_MODEL`
+- `ANTHROPIC_MAX_TOKENS`
+- `ANTHROPIC_BASE_URL`
+- `API_TIMEOUT_MS`
+
+Notes:
+
+- the Python services do not automatically load `.env` on startup
+- the Anthropic workflow helper does read the project `.env` file for provider config if one exists
+- for full per-service environment details, see `apps/api/README.md`, `apps/worker/README.md`, and `apps/web/README.md`
+
+### Start services separately
 
 Run each service in its own terminal:
 
@@ -374,18 +426,7 @@ Defaults:
 - Web: `http://127.0.0.1:3000`
 - Worker metrics: `http://127.0.0.1:9101/metrics`
 - Worker health: `http://127.0.0.1:9102/health`
-- Grafana: `http://127.0.0.1:3000` inside the Docker stack unless that port is already occupied by the web app
-
-If you run both the web app and Grafana locally, you will need to change one of the ports.
-
-### Minimal happy path
-
-1. Start Docker services.
-2. Export `AGENT_HARNESS_DATABASE_URL`.
-3. Export `AGENT_HARNESS_API_TOKENS` and a matching `AGENT_HARNESS_API_TOKEN` for the web proxy.
-4. Start API, worker, and web.
-5. Open the dashboard and launch a `demo.echo` run.
-6. Open the run detail page and confirm live SSE updates.
+- Grafana: `http://127.0.0.1:3001`
 
 ## Commands
 
