@@ -5,4 +5,4 @@ providers:
     folder: Agent Harness
     type: file
     options:
-      path: /etc/grafana/provisioning/dashboards/json
+      path: /var/lib/grafana/dashboards
