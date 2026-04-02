@@ -21,6 +21,9 @@ def compile_workflow_graph(
 
 
 def build_workflow_graph(workflow: WorkflowDefinition) -> Any:
+    if workflow.generate_response is None:
+        raise ValueError(f"Workflow {workflow.name} does not define generate_response.")
+
     def normalize_input(state: WorkflowState) -> WorkflowState:
         normalized_input = workflow.normalize_input(state["user_input"])
         return {

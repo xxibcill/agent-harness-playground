@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import timedelta
 from time import perf_counter
 from typing import Any, Callable, cast
@@ -33,6 +34,51 @@ class ExecutionCancelled(RuntimeError):
 
 class ExecutionTimedOut(TimeoutError):
     """Raised when a run exceeds its configured timeout."""
+
+
+@dataclass(frozen=True)
+class _WorkflowGraphBuilder:
+    executor: "RuntimeExecutor"
+    run: RunRecord
+    workflow: WorkflowDefinition
+
+    def node(
+        self,
+        node_name: str,
+        body: Callable[[WorkflowState], WorkflowState],
+    ) -> Callable[[WorkflowState], WorkflowState]:
+        def wrapped(state: WorkflowState) -> WorkflowState:
+            return self.executor._run_node(
+                self.run,
+                node_name=node_name,
+                state=state,
+                body=lambda: body(state),
+            )
+
+        return wrapped
+
+    def tool(
+        self,
+        node_name: str,
+        tool_name: str | Callable[[WorkflowState], str],
+        body: Callable[[WorkflowState], WorkflowState],
+    ) -> Callable[[WorkflowState], WorkflowState]:
+        def wrapped(state: WorkflowState) -> WorkflowState:
+            resolved_tool_name = tool_name(state) if callable(tool_name) else tool_name
+            return self.executor._run_node(
+                self.run,
+                node_name=node_name,
+                state=state,
+                body=lambda: self.executor._run_tool_value(
+                    self.run,
+                    node_name=node_name,
+                    tool_name=resolved_tool_name,
+                    state=state,
+                    body=lambda: body(state),
+                ),
+            )
+
+        return wrapped
 
 
 class RuntimeExecutor:
@@ -118,7 +164,8 @@ class RuntimeExecutor:
     def _invoke_workflow_graph(self, run: RunRecord, deadline) -> WorkflowState:  # type: ignore[no-untyped-def]
         self._assert_active(run.run_id, deadline)
         try:
-            graph = self._build_graph(run)
+            workflow = self._workflow_registry.get(run.workflow, run)
+            graph = self._build_graph(run, workflow)
         except ConfigurationError as exc:
             self._append_model_failed_event(
                 run,
@@ -132,18 +179,16 @@ class RuntimeExecutor:
 
         return cast(
             WorkflowState,
-            graph.invoke(
-                {
-                    "user_input": run.input,
-                    "normalized_input": "",
-                    "response": "",
-                    "model_output": None,
-                }
-            ),
+            graph.invoke(workflow.initial_state(run.input)),
         )
 
-    def _build_graph(self, run: RunRecord) -> Any:
-        workflow = self._workflow_registry.get(run.workflow, run)
+    def _build_graph(self, run: RunRecord, workflow: WorkflowDefinition) -> Any:
+        if workflow.graph_factory is not None:
+            return workflow.graph_factory(_WorkflowGraphBuilder(self, run, workflow))
+        if workflow.generate_response is None:
+            raise ConfigurationError(
+                f"Workflow {workflow.name} does not define a graph or generate_response."
+            )
         return compile_workflow_graph(
             cast(Any, self._normalize_input(run, workflow)),
             cast(Any, self._generate_response(run, workflow)),
@@ -436,6 +481,80 @@ class RuntimeExecutor:
                 usage=usage,
             )
 
+    def _run_tool_value(
+        self,
+        run: RunRecord,
+        *,
+        node_name: str,
+        tool_name: str,
+        state: WorkflowState,
+        body: Callable[[], WorkflowState],
+    ) -> WorkflowState:
+        deadline = self._build_deadline(run)
+        self._assert_active(run.run_id, deadline)
+        started_at = perf_counter()
+        outcome = "ok"
+        try:
+            with start_span(
+                self._observability.tracer,
+                f"tool.{tool_name}",
+                kind=SpanKind.CLIENT,
+                attributes={
+                    "agent.run_id": run.run_id,
+                    "agent.workflow": run.workflow,
+                    "agent.node_name": node_name,
+                    "agent.tool_name": tool_name,
+                },
+            ):
+                started_payload: dict[str, Any] = {
+                    "attempt_count": run.attempt_count,
+                    "state_summary": self._summarize_state(state),
+                }
+                tool_input = state.get("tool_input")
+                if isinstance(tool_input, str):
+                    started_payload["input_summary"] = self._summarize_text(tool_input)
+                self._store.append_event(
+                    run.run_id,
+                    event_type="tool.started",
+                    category="tool",
+                    node_name=node_name,
+                    tool_name=tool_name,
+                    payload=started_payload,
+                )
+                self._assert_active(run.run_id, deadline)
+                next_state = body()
+                self._assert_active(run.run_id, deadline)
+                completed_payload: dict[str, Any] = {
+                    "state_summary": self._summarize_state(next_state),
+                    "state_diff": self._build_state_diff(state, next_state),
+                }
+                next_tool_input = next_state.get("tool_input")
+                if isinstance(next_tool_input, str):
+                    completed_payload["input_summary"] = self._summarize_text(next_tool_input)
+                tool_output = next_state.get("tool_output")
+                if isinstance(tool_output, str):
+                    completed_payload["output_summary"] = self._summarize_text(tool_output)
+                self._store.append_event(
+                    run.run_id,
+                    event_type="tool.completed",
+                    category="tool",
+                    node_name=node_name,
+                    tool_name=tool_name,
+                    payload=completed_payload,
+                )
+                return next_state
+        except Exception:
+            outcome = "error"
+            raise
+        finally:
+            self._observability.metrics.record_tool(
+                workflow=run.workflow,
+                node_name=node_name,
+                tool_name=tool_name,
+                outcome=outcome,
+                duration_seconds=perf_counter() - started_at,
+            )
+
     def _assert_active(self, run_id: str, deadline) -> None:  # type: ignore[no-untyped-def]
         self._assert_not_cancelled(run_id)
         self._assert_within_deadline(run_id, deadline)
@@ -469,6 +588,12 @@ class RuntimeExecutor:
             "response": result["response"],
             "normalized_input": result["normalized_input"],
         }
+        for key, value in result.items():
+            if key in {"user_input", "normalized_input", "response", "model_output"}:
+                continue
+            if value in (None, "", []):
+                continue
+            output[key] = value
         if result.get("model_output") is not None:
             output["model"] = result["model_output"]
         return output
