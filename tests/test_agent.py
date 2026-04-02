@@ -12,6 +12,7 @@ from agent_harness_core.workflows import (
 )
 
 from basic_langgraph_agent.agent import AgentConfig, build_graph, create_responder
+from basic_langgraph_agent.tool_agent import build_tool_agent_graph
 from basic_langgraph_agent.usage_tracker import (
     AverageTpm,
     UsageEntry,
@@ -31,6 +32,65 @@ def test_basic_agent_returns_a_response() -> None:
 
     assert result["normalized_input"] == "Test run"
     assert result["response"] == "Echo: Test run"
+
+
+def test_tool_agent_uses_calculator_tool() -> None:
+    graph = build_tool_agent_graph()
+
+    result = graph.invoke(
+        {
+            "user_input": "calculate 2 + 3 * 4",
+            "normalized_input": "",
+            "selected_tool": None,
+            "tool_input": None,
+            "tool_output": None,
+            "response": "",
+        }
+    )
+
+    assert result["selected_tool"] == "calculator"
+    assert result["tool_input"] == "2 + 3 * 4"
+    assert result["tool_output"] == "14"
+    assert result["response"] == "I used calculator on 2 + 3 * 4 and got 14."
+
+
+def test_tool_agent_uses_lookup_tool() -> None:
+    graph = build_tool_agent_graph()
+
+    result = graph.invoke(
+        {
+            "user_input": "What is the capital of Japan?",
+            "normalized_input": "",
+            "selected_tool": None,
+            "tool_input": None,
+            "tool_output": None,
+            "response": "",
+        }
+    )
+
+    assert result["selected_tool"] == "lookup_capital"
+    assert result["tool_input"] == "Japan"
+    assert result["tool_output"] == "Tokyo"
+    assert result["response"] == "I used lookup_capital and found: Japan -> Tokyo."
+
+
+def test_tool_agent_can_fall_back_without_tool() -> None:
+    graph = build_tool_agent_graph()
+
+    result = graph.invoke(
+        {
+            "user_input": "say hello to the team",
+            "normalized_input": "",
+            "selected_tool": None,
+            "tool_input": None,
+            "tool_output": None,
+            "response": "",
+        }
+    )
+
+    assert result["selected_tool"] is None
+    assert result["tool_output"] is None
+    assert result["response"] == "I did not need a tool. Echo: say hello to the team"
 
 
 def test_load_config_reads_custom_anthropic_env(monkeypatch) -> None:

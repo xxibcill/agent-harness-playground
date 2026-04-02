@@ -413,6 +413,7 @@ uv run pytest
 pnpm --dir apps/web test
 pnpm --dir apps/web build
 uv run basic-agent --model "your-model" "Say hello"
+uv run basic-tool-agent "What is the capital of Japan?"
 uv run basic-agent-usage
 ```
 
@@ -451,6 +452,7 @@ Use these first if you want to understand the system as it exists now:
 These files are still runnable and still tested, but they are no longer the main architecture:
 
 - `src/basic_langgraph_agent/agent.py`
+- `src/basic_langgraph_agent/tool_agent.py`
 - `src/basic_langgraph_agent/usage_tracker.py`
 
 The legacy CLI now delegates much of its provider logic to code in `packages/agent-core`.
