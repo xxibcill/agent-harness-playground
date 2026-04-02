@@ -12,6 +12,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from agent_harness_core import (
     ExecutionCancelled,
+    IsolatedExecutor,
+    ResourceLimits,
     RunStore,
     RuntimeExecutor,
     build_run_store,
@@ -62,6 +64,15 @@ class WorkerConfig:
     )
     health_stale_after_seconds: float = field(
         default_factory=lambda: _env_float("AGENT_HARNESS_WORKER_HEALTH_STALE_SECONDS", 45.0)
+    )
+    enable_process_isolation: bool = field(
+        default_factory=lambda: os.getenv("AGENT_HARNESS_PROCESS_ISOLATION", "true").lower() == "true"
+    )
+    cpu_limit_seconds: int = field(
+        default_factory=lambda: _env_int("AGENT_HARNESS_CPU_LIMIT_SECONDS", 300)
+    )
+    memory_limit_mb: int = field(
+        default_factory=lambda: _env_int("AGENT_HARNESS_MEMORY_LIMIT_MB", 512)
     )
 
 
@@ -377,7 +388,25 @@ def main() -> None:
     health_server = WorkerHealthServer(config, health_monitor)
     observability.start_metrics_server(config.metrics_port)
     health_server.start()
-    executor = RuntimeExecutor(store, observability=observability)
+
+    # Build executor with optional process isolation
+    resource_limits = None
+    if config.enable_process_isolation:
+        resource_limits = ResourceLimits(
+            cpu_seconds=config.cpu_limit_seconds,
+            memory_mb=config.memory_limit_mb,
+        )
+        logger.info(
+            "Process isolation enabled. cpu_limit_seconds=%s memory_limit_mb=%s",
+            config.cpu_limit_seconds,
+            config.memory_limit_mb,
+        )
+
+    executor = IsolatedExecutor(
+        store,
+        observability=observability,
+        resource_limits=resource_limits,
+    )
     logger.info(
         "Worker started. worker_id=%s poll_interval_seconds=%.1f "
         "lease_seconds=%s metrics_port=%s health_port=%s",

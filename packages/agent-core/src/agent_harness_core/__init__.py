@@ -1,5 +1,6 @@
 from agent_harness_core.errors import ConfigurationError, ProviderError
 from agent_harness_core.executor import ExecutionCancelled, ExecutionTimedOut, RuntimeExecutor
+from agent_harness_core.isolated_executor import IsolatedExecutor, ResourceLimits
 from agent_harness_core.runtime import (
     InMemoryRunStore,
     PostgresRunStore,
@@ -21,13 +22,15 @@ __all__ = [
     "ExecutionCancelled",
     "ExecutionTimedOut",
     "InMemoryRunStore",
-    "UnknownWorkflowError",
+    "IsolatedExecutor",
     "PostgresRunStore",
+    "ProviderError",
+    "ResourceLimits",
     "RunStore",
     "RunStoreConfig",
     "RuntimeExecutor",
+    "UnknownWorkflowError",
     "WorkflowRegistry",
-    "ProviderError",
     "build_anthropic_workflow",
     "build_default_workflow_registry",
     "build_run_store",
