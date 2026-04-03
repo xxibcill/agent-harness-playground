@@ -1,15 +1,16 @@
 # Agent Harness Playground
 
-This repository is already a working agent runtime monorepo, not just a scaffold.
+This is an **educational project** for learning agent workflow patterns step by step.
 
-Today it contains:
+Each workflow introduces exactly one new concept on top of the previous one, building from a trivial echo to a full ReAct loop. The repo is a working agent runtime monorepo -- not a scaffold -- so you can run every workflow end-to-end and observe real events in the dashboard.
+
+It contains:
 
 - a FastAPI control plane for durable agent runs
 - a Python worker that claims queued runs from Postgres and executes workflows
 - a Next.js operator console that launches runs and follows them over SSE
 - shared Python packages for runtime logic, contracts, and observability
-
-The repo still includes roadmap documents and a few historical notes, so this README is intentionally focused on what the code does now.
+- a sequence of **seven teaching workflows** that progress from simple to advanced
 
 ## Quick Start
 
@@ -69,12 +70,7 @@ export AGENT_HARNESS_API_TOKEN=local-dev-token
 
 ### Optional: enable the Anthropic workflow
 
-The `anthropic.respond` workflow needs provider credentials. Export these before `make dev`:
-
-```bash
-export ANTHROPIC_AUTH_TOKEN=your-token
-export ANTHROPIC_MODEL=your-model-id
-```
+The `anthropic.respond` workflow (step 7 in the learning ladder) needs provider credentials. See the setup instructions in the [Workflows](#7-anthropicrespond----external-model-integration) section below.
 
 ### Stop everything
 
@@ -86,13 +82,33 @@ make infra-down
 
 ## What Runs Today
 
-The current platform supports three workflows:
+The platform ships **seven workflows** designed as a learning ladder. Run them in this order -- each one adds exactly one concept.
 
-- `demo.echo`: normalizes whitespace and returns `Echo: <input>` without calling an external model
-- `demo.react`: runs a basic ReAct loop with local planner/tool steps before producing a response
-- `anthropic.respond`: calls an Anthropic-compatible `messages.create(...)` endpoint from the worker
+| # | Workflow | New concept | Needs API key? |
+|---|----------|-------------|----------------|
+| 1 | `demo.echo` | Direct response | No |
+| 2 | `demo.route` | Conditional branching | No |
+| 3 | `demo.tool.single` | Tool invocation as a graph node | No |
+| 4 | `demo.tool.select` | Choosing among multiple tools | No |
+| 5 | `demo.react.once` | One-shot reason then act | No |
+| 6 | `demo.react` | Looping ReAct cycle | No |
+| 7 | `anthropic.respond` | External model integration | Yes |
+
+Workflows 1--6 use deterministic local logic, so you can experiment without any provider credentials. `anthropic.respond` is the first workflow that calls an external LLM.
 
 Runs are durable. The API writes them to Postgres, the worker claims them with a lease, execution emits structured events, and the web app renders both historical state and live updates.
+
+### Recommended run order
+
+Start the stack with `make dev`, open `http://127.0.0.1:3000`, and try these prompts in order:
+
+1. **`demo.echo`** -- type anything, e.g. `hello world`. Confirms the stack works end-to-end.
+2. **`demo.route`** -- try `hi there`, `what is 2+2?`, `list my files`, or `the sky is blue`. Watch the router classify each input.
+3. **`demo.tool.single`** -- enter `15 % 4`. The workflow always calls its one calculator tool.
+4. **`demo.tool.select`** -- try `calculate 12 * 7` then `tell me the time`. The workflow inspects the input to pick the right tool.
+5. **`demo.react.once`** -- enter `what is 25 / 5?`. The agent reasons once, picks a tool, executes it, and responds immediately.
+6. **`demo.react`** -- enter `add 3 and 5, then multiply the result by 2`. The agent loops through reasoning and tool calls until it has the final answer.
+7. **`anthropic.respond`** -- requires an Anthropic API key (see setup below). Any prompt will be forwarded to the model.
 
 ## Architecture
 
@@ -320,30 +336,82 @@ The web UI reads these events directly to build its timeline and workflow graph.
 
 ## Workflows
 
-### `demo.echo`
+### 1. `demo.echo` -- Direct Response
 
 Defined in `packages/agent-core/src/agent_harness_core/workflows/demo_echo.py`.
 
-Behavior:
+The simplest smoke test. No branching, no tools, no external calls. Given an input string it normalizes whitespace and returns `"Echo: <input>"`.
 
-- normalizes whitespace
-- returns `Echo: <normalized_input>`
-- records synthetic token usage
-- does not require any external credentials
+**What this teaches:** the basic shape of a workflow -- receive input, produce output, track token usage -- with zero moving parts. If `demo.echo` passes, the runtime infrastructure is working.
 
-Use this workflow when you want to test the system without provider dependencies.
+**Try:** `hello world`
 
-### `anthropic.respond`
+### 2. `demo.route` -- Conditional Branching
+
+Defined in `packages/agent-core/src/agent_harness_core/workflows/demo_route.py`.
+
+Introduces a LangGraph `StateGraph` with conditional edges. A `classify` node sorts the input into one of four categories (greeting, question, command, statement), then routes to the matching response node.
+
+**What this teaches:** how to branch inside a graph without yet thinking about tool calls. The only new idea is *conditional routing*.
+
+**Try:** `hi there` / `what is 2+2?` / `list my files` / `the sky is blue`
+
+### 3. `demo.tool.single` -- Single Tool Execution
+
+Defined in `packages/agent-core/src/agent_harness_core/workflows/demo_tool_single.py`.
+
+Calls exactly one deterministic tool (a calculator) embedded in the graph. No selection logic -- the tool is always invoked.
+
+**What this teaches:** how a tool node fits into the graph. The only new idea is *tool invocation as a graph node*.
+
+**Try:** `15 % 4`
+
+### 4. `demo.tool.select` -- Choosing Among Multiple Tools
+
+Defined in `packages/agent-core/src/agent_harness_core/workflows/demo_tool_select.py`.
+
+Registers several tools and adds a selection step that inspects the input to pick the right one. Execution is still one-shot: pick a tool, call it, respond.
+
+**What this teaches:** *tool selection* -- inspecting input to decide which tool to use. No looping yet.
+
+**Try:** `calculate 12 * 7` then `tell me the time`
+
+### 5. `demo.react.once` -- One-shot Reason Then Act
+
+Defined in `packages/agent-core/src/agent_harness_core/workflows/demo_react_once.py`.
+
+Combines reasoning and tool selection into a single plan-then-execute pass. The agent reasons about what to do, selects a tool, executes it, and responds immediately -- no iteration.
+
+**What this teaches:** the *reason-act pattern* in its simplest one-pass form.
+
+**Try:** `what is 25 / 5?`
+
+### 6. `demo.react` -- Looping ReAct Cycle
+
+Defined in `packages/agent-core/src/agent_harness_core/workflows/react.py`.
+
+Extends the one-shot pattern into a loop: reason, act, observe the result, then reason again. The graph cycles through reason and tool nodes until no further tool call is needed, then responds.
+
+**What this teaches:** *iteration inside a workflow graph* -- the core ReAct loop. Unlike `demo.react.once`, this workflow can use multiple tools in sequence by looping back through reasoning after each tool result.
+
+**Try:** `add 3 and 5, then multiply the result by 2`
+
+### 7. `anthropic.respond` -- External Model Integration
 
 Defined in `packages/agent-core/src/agent_harness_core/workflows/anthropic.py`.
 
-Behavior:
+The first workflow that calls an external LLM. Uses the Anthropic Messages API to generate a response. Every concept before this point used deterministic logic; this step introduces a *real model* as the reasoning engine.
 
-- loads worker-side provider config
-- normalizes whitespace
-- calls `Anthropic.messages.create(...)`
-- converts provider failures into typed `ProviderError` variants
-- appends token usage entries to `data/token_usage.jsonl`
+**What this teaches:** how to wire a provider API call into the same workflow abstraction. The only new idea is *external model integration*.
+
+**Setup:** requires provider credentials. Export these before `make dev`:
+
+```bash
+export ANTHROPIC_AUTH_TOKEN=your-token
+export ANTHROPIC_MODEL=your-model-id
+```
+
+**Try:** any prompt -- it will be forwarded to the model.
 
 The worker, not the browser or web app, owns the provider credentials.
 
