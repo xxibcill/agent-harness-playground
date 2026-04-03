@@ -44,6 +44,51 @@ const initialLauncherState: LauncherState = {
   timeoutSeconds: "300",
 };
 
+const workflowOptions = [
+  {
+    value: "demo.echo",
+    title: "Echo",
+    badge: "Step 1",
+    description: "Verify core infrastructure: create, queue, execute, stream.",
+  },
+  {
+    value: "demo.route",
+    title: "Routing",
+    badge: "Step 2",
+    description: "Deterministic branching: classify input and route to response.",
+  },
+  {
+    value: "demo.react.once",
+    title: "ReAct Once",
+    badge: "Step 3",
+    description: "Single reason-act cycle: plan, use one tool, respond.",
+  },
+  {
+    value: "demo.react",
+    title: "ReAct Loop",
+    badge: "Step 4",
+    description: "Iterative reasoning: plan, use tools, observe, repeat.",
+  },
+  {
+    value: "demo.tool.single",
+    title: "Single Tool",
+    badge: "Step 5",
+    description: "Call one tool with input from user prompt.",
+  },
+  {
+    value: "demo.tool.select",
+    title: "Tool Selection",
+    badge: "Step 6",
+    description: "Dynamic tool selection based on input analysis.",
+  },
+  {
+    value: "anthropic.respond",
+    title: "Provider API",
+    badge: "Step 7",
+    description: "Use external model API with configurable parameters.",
+  },
+] as const;
+
 export function DashboardPage() {
   const router = useRouter();
   const [runs, setRuns] = useState<RunRecord[]>([]);
@@ -134,29 +179,76 @@ export function DashboardPage() {
   const failureRuns = runs
     .filter((run) => run.status === "failed" || run.status === "cancelled")
     .slice(0, 4);
+  const latestRun = runs[0] ?? null;
   const isModelWorkflow = launcher.workflow === "anthropic.respond";
   const workflowHint =
     launcher.workflow === "anthropic.respond"
       ? "Model-backed workflow using Claude. Ensure ANTHROPIC_AUTH_TOKEN is configured."
       : launcher.workflow === "demo.react"
-        ? "Basic ReAct loop that plans, uses local tools, observes the result, and then answers."
-        : "Demo workflow that echoes input. Useful for testing without API keys.";
+        ? "Looping ReAct workflow that can plan, use tools, observe results, and iterate multiple times before answering."
+        : launcher.workflow === "demo.react.once"
+          ? "One-shot ReAct: single reason-act cycle. Plans, uses one tool, then responds."
+          : "Demo workflow that echoes input. Useful for testing without API keys.";
+  const consoleGuidance = buildConsoleGuidance(summary, latestRun, refreshError);
 
   return (
-    <main className="app-shell">
-      <section className="hero-panel">
-        <div>
-          <p className="eyebrow">Task 09 operator surface</p>
-          <h1>Operator console for live agent runs</h1>
+    <main className="app-shell app-shell--dashboard">
+      <section className="hero-panel hero-panel--dashboard">
+        <div className="hero-panel__content">
+          <p className="eyebrow">Agent Harness operator console</p>
+          <h1>Launch runs, watch state, and inspect the whole execution path.</h1>
           <p className="lede">
-            Launch demo or model-backed executions, watch workflow state transitions over SSE, and
-            inspect provider-backed results from the same operator surface.
+            This surface is for operators doing real checks, not a marketing dashboard. Start a
+            run, keep the queue readable, and move straight into the live detail stream when
+            something changes.
           </p>
+          <div className="hero-stat-grid">
+            <HeroStat
+              label="Runs recorded"
+              value={String(summary.totalRuns)}
+              detail={summary.totalRuns === 0 ? "No history yet" : "Across the current operator view"}
+            />
+            <HeroStat
+              label="In flight"
+              value={String(summary.activeRuns)}
+              detail={
+                summary.activeRuns === 0
+                  ? "Nothing is currently executing"
+                  : "Queued, running, or cancelling"
+              }
+            />
+            <HeroStat
+              label="Success rate"
+              value={summary.successRate}
+              detail={
+                summary.terminalRuns === 0
+                  ? "Computed after the first terminal run"
+                  : `${summary.completedRuns} completed / ${summary.terminalRuns} terminal`
+              }
+            />
+          </div>
         </div>
-        <div className="hero-meta">
-          <span className="hero-chip">Pure client Next.js</span>
-          <span className="hero-chip">Streaming run updates</span>
-          <span className="hero-chip">Historical detail routes</span>
+
+        <div className="hero-rail">
+          <article className="hero-rail__card">
+            <div className="section-heading section-heading--compact">
+              <div>
+                <p className="section-label">Console posture</p>
+                <h2>Built for fast operational checks</h2>
+              </div>
+            </div>
+            <ul className="hero-list">
+              <li>Creates runs against the same-origin `/api/runs` proxy.</li>
+              <li>Refreshes recent run state every 4 seconds.</li>
+              <li>Hands off to the live SSE detail page immediately after launch.</li>
+            </ul>
+          </article>
+
+          <article className="hero-rail__card hero-rail__card--accent">
+            <p className="section-label">Suggested next move</p>
+            <h2>{consoleGuidance.title}</h2>
+            <p>{consoleGuidance.copy}</p>
+          </article>
         </div>
       </section>
 
@@ -165,39 +257,117 @@ export function DashboardPage() {
           <div className="section-heading">
             <div>
               <p className="section-label">Run launcher</p>
-              <h2>Start a new workflow run</h2>
+              <h2>Create a run and jump straight into live detail</h2>
             </div>
             <span className="status-chip status-chip--queued">Ready</span>
           </div>
           <form className="launcher-form" onSubmit={handleSubmit}>
-            <label className="field">
-              <span>Workflow</span>
-              <select
-                value={launcher.workflow}
-                onChange={(event) =>
-                  setLauncher((current) => ({ ...current, workflow: event.target.value }))
-                }
-              >
-                <option value="demo.echo">demo.echo (Demo mode - no API required)</option>
-                <option value="demo.react">demo.react (Basic ReAct loop with local tools)</option>
-                <option value="anthropic.respond">anthropic.respond (Anthropic Claude - requires API key)</option>
-              </select>
-              <span className="field-hint">{workflowHint}</span>
-            </label>
-            <label className="field">
-              <span>Prompt</span>
-              <textarea
-                rows={6}
-                placeholder="Summarize the operator signals for this run."
-                value={launcher.input}
-                onChange={(event) =>
-                  setLauncher((current) => ({ ...current, input: event.target.value }))
-                }
-                required
-              />
-            </label>
+            <section className="form-section">
+              <div className="form-section__header">
+                <div>
+                  <p className="section-kicker">Workflow</p>
+                  <h3>Choose what you want to exercise</h3>
+                </div>
+                <p>{workflowHint}</p>
+              </div>
+              <div className="workflow-option-grid">
+                {workflowOptions.map((option) => (
+                  <button
+                    aria-pressed={launcher.workflow === option.value}
+                    className={`workflow-option${launcher.workflow === option.value ? " workflow-option--active" : ""}`}
+                    key={option.value}
+                    onClick={() =>
+                      setLauncher((current) => ({ ...current, workflow: option.value }))
+                    }
+                    type="button"
+                  >
+                    <span className="workflow-option__badge">{option.badge}</span>
+                    <strong>{option.title}</strong>
+                    <span>{option.description}</span>
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <section className="form-section">
+              <div className="form-section__header">
+                <div>
+                  <p className="section-kicker">Prompt</p>
+                  <h3>Describe the run input clearly</h3>
+                </div>
+                <p>The dashboard will redirect to the detail page as soon as the run is created.</p>
+              </div>
+              <label className="field">
+                <span>Prompt</span>
+                <textarea
+                  rows={6}
+                  placeholder="Summarize the operator signals for this run."
+                  value={launcher.input}
+                  onChange={(event) =>
+                    setLauncher((current) => ({ ...current, input: event.target.value }))
+                  }
+                  required
+                />
+              </label>
+            </section>
+
+            <section className="form-section form-section--compact">
+              <div className="form-section__header">
+                <div>
+                  <p className="section-kicker">Runtime policy</p>
+                  <h3>Set queue timing and retry limits</h3>
+                </div>
+                <p>These values control scheduling, retry behavior, and the worker timeout budget.</p>
+              </div>
+              <div className="field-row field-row--triple">
+                <label className="field">
+                  <span>Schedule at</span>
+                  <input
+                    type="datetime-local"
+                    value={launcher.scheduledAt}
+                    onChange={(event) =>
+                      setLauncher((current) => ({ ...current, scheduledAt: event.target.value }))
+                    }
+                  />
+                </label>
+                <label className="field">
+                  <span>Max attempts</span>
+                  <input
+                    inputMode="numeric"
+                    min={1}
+                    max={10}
+                    onChange={(event) =>
+                      setLauncher((current) => ({ ...current, maxAttempts: event.target.value }))
+                    }
+                    type="number"
+                    value={launcher.maxAttempts}
+                  />
+                </label>
+                <label className="field">
+                  <span>Timeout (seconds)</span>
+                  <input
+                    inputMode="numeric"
+                    min={5}
+                    max={3600}
+                    onChange={(event) =>
+                      setLauncher((current) => ({ ...current, timeoutSeconds: event.target.value }))
+                    }
+                    type="number"
+                    value={launcher.timeoutSeconds}
+                  />
+                </label>
+              </div>
+            </section>
+
             {isModelWorkflow ? (
-              <>
+              <section className="form-section form-section--compact">
+                <div className="form-section__header">
+                  <div>
+                    <p className="section-kicker">Provider overrides</p>
+                    <h3>Override model and transport settings</h3>
+                  </div>
+                  <p>Leave fields blank to use worker defaults.</p>
+                </div>
                 <div className="field-row">
                   <label className="field">
                     <span>Model</span>
@@ -209,7 +379,7 @@ export function DashboardPage() {
                       }
                     />
                     <span className="field-hint">
-                      Stored in the shared workflow config and passed through to the worker.
+                      Passed through in the shared workflow config.
                     </span>
                   </label>
                   <label className="field">
@@ -256,95 +426,121 @@ export function DashboardPage() {
                     />
                   </label>
                 </div>
-              </>
-            ) : (
-              <p className="field-hint">
-                Demo runs do not require provider configuration. Switch to
-                `anthropic.respond` to supply model, token, and runtime override settings.
-              </p>
-            )}
-            <div className="field-row">
+              </section>
+            ) : null}
+
+            <section className="form-section">
+              <div className="form-section__header">
+                <div>
+                  <p className="section-kicker">Metadata</p>
+                  <h3>Attach operator context to the run</h3>
+                </div>
+                <p>JSON only. Include origin, ticket IDs, or any downstream routing hints.</p>
+              </div>
               <label className="field">
-                <span>Schedule at</span>
-                <input
-                  type="datetime-local"
-                  value={launcher.scheduledAt}
+                <span>Run metadata</span>
+                <textarea
+                  rows={6}
+                  value={launcher.metadataText}
                   onChange={(event) =>
-                    setLauncher((current) => ({ ...current, scheduledAt: event.target.value }))
+                    setLauncher((current) => ({ ...current, metadataText: event.target.value }))
                   }
                 />
               </label>
-              <label className="field">
-                <span>Max attempts</span>
-                <input
-                  inputMode="numeric"
-                  min={1}
-                  max={10}
-                  onChange={(event) =>
-                    setLauncher((current) => ({ ...current, maxAttempts: event.target.value }))
-                  }
-                  type="number"
-                  value={launcher.maxAttempts}
-                />
-              </label>
-            </div>
-            <div className="field-row">
-              <label className="field">
-                <span>Timeout (seconds)</span>
-                <input
-                  inputMode="numeric"
-                  min={5}
-                  max={3600}
-                  onChange={(event) =>
-                    setLauncher((current) => ({ ...current, timeoutSeconds: event.target.value }))
-                  }
-                  type="number"
-                  value={launcher.timeoutSeconds}
-                />
-              </label>
-            </div>
-            <label className="field">
-              <span>Run metadata</span>
-              <textarea
-                rows={7}
-                value={launcher.metadataText}
-                onChange={(event) =>
-                  setLauncher((current) => ({ ...current, metadataText: event.target.value }))
-                }
-              />
-            </label>
+            </section>
+
             {formError ? <p className="inline-error">{formError}</p> : null}
-            <button className="primary-button" disabled={isSubmitting} type="submit">
-              {isSubmitting ? "Creating run..." : "Create run"}
-            </button>
+            <div className="form-actions">
+              <p className="form-note">
+                New runs appear in recent history immediately, then open their detail route for live
+                event streaming.
+              </p>
+              <button className="primary-button" disabled={isSubmitting} type="submit">
+                {isSubmitting ? "Creating run..." : "Create run and open live detail"}
+              </button>
+            </div>
           </form>
         </article>
 
-        <article className="panel summary-panel">
-          <div className="section-heading">
-            <div>
-              <p className="section-label">Operator metrics</p>
-              <h2>Queue and terminal health</h2>
+        <aside className="dashboard-sidebar">
+          <article className="panel summary-panel">
+            <div className="section-heading">
+              <div>
+                <p className="section-label">Operator metrics</p>
+                <h2>Queue posture at a glance</h2>
+              </div>
+              <span className="section-caption">
+                {isLoading ? "Loading..." : "Refreshed continuously"}
+              </span>
             </div>
-            <span className="section-caption">
-              {isLoading ? "Loading..." : `Updated ${formatRelativeTime(new Date().toISOString())}`}
-            </span>
-          </div>
-          <div className="metric-grid">
-            <MetricCard label="Total runs" value={String(summary.totalRuns)} accent="accent" />
-            <MetricCard label="Queued" value={String(summary.queuedRuns)} accent="queued" />
-            <MetricCard label="Active" value={String(summary.activeRuns)} accent="running" />
-            <MetricCard label="Success rate" value={summary.successRate} accent="completed" />
-          </div>
-          <div className="summary-copy">
-            <p>
-              {summary.terminalRuns === 0
-                ? "No terminal runs recorded yet."
-                : `${summary.completedRuns} completed and ${summary.failedRuns} failed or cancelled.`}
-            </p>
+            <div className="metric-grid metric-grid--summary">
+              <MetricCard
+                accent="accent"
+                detail="All visible runs"
+                label="Total runs"
+                value={String(summary.totalRuns)}
+              />
+              <MetricCard
+                accent="queued"
+                detail="Queued or waiting"
+                label="Queued"
+                value={String(summary.queuedRuns)}
+              />
+              <MetricCard
+                accent="running"
+                detail="Currently executing"
+                label="Active"
+                value={String(summary.activeRuns)}
+              />
+              <MetricCard
+                accent="completed"
+                detail="Terminal completion rate"
+                label="Success rate"
+                value={summary.successRate}
+              />
+            </div>
+            <div className="summary-callout">
+              <strong>{consoleGuidance.title}</strong>
+              <p>{consoleGuidance.copy}</p>
+            </div>
             {refreshError ? <p className="inline-error">{refreshError}</p> : null}
-          </div>
-        </article>
+          </article>
+
+          <article className="panel activity-panel">
+            <div>
+              <p className="section-label">Latest movement</p>
+              <h2>{latestRun ? "Most recent run" : "What happens next"}</h2>
+            </div>
+            {latestRun ? (
+              <div className="activity-card">
+                <div className="activity-card__header">
+                  <StatusChip status={latestRun.status} />
+                  <span className="table-secondary">{formatRelativeTime(latestRun.updated_at)}</span>
+                </div>
+                <h3>{latestRun.workflow}</h3>
+                <p>{latestRun.input.trim() || "No prompt captured for this run."}</p>
+                <dl className="activity-card__meta">
+                  <div>
+                    <dt>Created</dt>
+                    <dd>{formatDateTime(latestRun.created_at)}</dd>
+                  </div>
+                  <div>
+                    <dt>Duration</dt>
+                    <dd>{formatDuration(latestRun.started_at, latestRun.completed_at, latestRun.updated_at)}</dd>
+                  </div>
+                </dl>
+                <Link className="table-link" href={`/runs/${latestRun.run_id}`}>
+                  Open live detail view
+                </Link>
+              </div>
+            ) : (
+              <EmptyState
+                title="Launch a smoke test first"
+                copy="Start with `demo.echo` to validate the control plane, then switch to a model-backed run when the queue and event stream look healthy."
+              />
+            )}
+          </article>
+        </aside>
       </section>
 
       <section className="dashboard-grid dashboard-grid--wide">
@@ -354,14 +550,14 @@ export function DashboardPage() {
               <p className="section-label">Recent runs</p>
               <h2>Execution history</h2>
             </div>
-            <Link className="ghost-link" href="/">
-              Dashboard
-            </Link>
+            <span className="section-caption">
+              {isLoading ? "Loading..." : `${recentRuns.length} run${recentRuns.length === 1 ? "" : "s"} shown`}
+            </span>
           </div>
           {recentRuns.length === 0 ? (
             <EmptyState
               title="No runs yet"
-              copy="Create a run to start building history, metrics, and live event data."
+              copy="Create a run to start building history, queue signals, and the live event timeline."
             />
           ) : (
             <div className="table-wrap">
@@ -405,18 +601,37 @@ export function DashboardPage() {
           )}
         </article>
 
-        <aside className="panel failure-panel">
+        <aside className="panel watchlist-panel">
           <div className="section-heading">
             <div>
-              <p className="section-label">Failure inspection</p>
-              <h2>Runs that need attention</h2>
+              <p className="section-label">{failureRuns.length === 0 ? "Operator playbook" : "Watchlist"}</p>
+              <h2>{failureRuns.length === 0 ? "Recommended verification flow" : "Runs that need attention"}</h2>
             </div>
           </div>
           {failureRuns.length === 0 ? (
-            <EmptyState
-              title="No failures recorded"
-              copy="The dashboard will surface failed and cancelled runs here with direct links."
-            />
+            <div className="playbook-list">
+              <article className="playbook-item">
+                <span className="playbook-item__index">01</span>
+                <div>
+                  <h3>Smoke test the happy path</h3>
+                  <p>Start with `demo.echo` and confirm that the detail page begins streaming events.</p>
+                </div>
+              </article>
+              <article className="playbook-item">
+                <span className="playbook-item__index">02</span>
+                <div>
+                  <h3>Exercise the worker loop</h3>
+                  <p>Run `demo.react` when you want to see planning, tool use, and intermediate steps.</p>
+                </div>
+              </article>
+              <article className="playbook-item">
+                <span className="playbook-item__index">03</span>
+                <div>
+                  <h3>Move to the provider-backed path</h3>
+                  <p>Use `anthropic.respond` only after credentials and transport defaults are confirmed.</p>
+                </div>
+              </article>
+            </div>
           ) : (
             <div className="failure-list">
               {failureRuns.map((run) => (
@@ -520,15 +735,36 @@ function MetricCard({
   label,
   value,
   accent,
+  detail,
 }: {
   label: string;
   value: string;
   accent: "accent" | "queued" | "running" | "completed";
+  detail?: string;
 }) {
   return (
     <article className={`metric-card metric-card--${accent}`}>
       <span>{label}</span>
       <strong>{value}</strong>
+      {detail ? <p>{detail}</p> : null}
+    </article>
+  );
+}
+
+function HeroStat({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+}) {
+  return (
+    <article className="hero-stat">
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <p>{detail}</p>
     </article>
   );
 }
@@ -546,4 +782,43 @@ function EmptyState({ title, copy }: { title: string; copy: string }) {
       <p>{copy}</p>
     </div>
   );
+}
+
+function buildConsoleGuidance(
+  summary: ReturnType<typeof summarizeRuns>,
+  latestRun: RunRecord | null,
+  refreshError: string | null,
+) {
+  if (refreshError) {
+    return {
+      title: "Reconnect the run feed",
+      copy: "The UI is rendering, but the browser could not refresh recent runs. Fix the API connection before trusting queue counts.",
+    };
+  }
+
+  if (!latestRun) {
+    return {
+      title: "Run `demo.echo` first",
+      copy: "Use the zero-dependency workflow to validate the full create-to-stream path before testing anything provider-backed.",
+    };
+  }
+
+  if (summary.activeRuns > 0) {
+    return {
+      title: "Keep an eye on the live stream",
+      copy: "At least one run is still in flight. Open the newest detail page to confirm node transitions and output are still advancing.",
+    };
+  }
+
+  if (summary.failedRuns > 0) {
+    return {
+      title: "Review the failure watchlist",
+      copy: "There are failed or cancelled runs in history. Use the watchlist to jump into the latest detail pages and inspect failure context.",
+    };
+  }
+
+  return {
+    title: "The queue looks healthy",
+    copy: "The current history is clean. If you want a deeper check, move from demo workflows to the provider-backed path next.",
+  };
 }
