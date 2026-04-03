@@ -6,6 +6,16 @@ This changelog was initialized from the milestone documents in [`tasks/`](/Users
 
 ## Unreleased
 
+### Planned
+
+- Educational workflow learning ladder: incremental demos teaching routing, tool use, tool selection, one-shot reasoning, and looping agent behavior.
+- Deterministic demo workflows: `demo.route`, `demo.tool.single`, `demo.tool.select`, `demo.react.once`.
+- Refined `demo.react` documentation to clearly present looping agent behavior.
+- Dashboard workflow catalog showing the learning progression in the operator UI.
+- README workflow lessons section with recommended run order and example prompts.
+- Automated tests locking down the educational workflow progression.
+- Optional Anthropic React capstone combining provider reasoning with tool use.
+
 ### Removed
 
 - Deleted the legacy root CLI prototype and its console script entrypoints.
@@ -13,6 +23,75 @@ This changelog was initialized from the milestone documents in [`tasks/`](/Users
 ### Changed
 
 - Retargeted root package metadata, docs, and tests to the current `agent-core` workflow surface.
+
+## Milestone 10 - Production Topology and Rollout
+
+### Added
+
+- Deployment documentation for the unified web entry point topology.
+- Runtime configuration guidance for private backend services and workers.
+- Canary procedure verifying a run can be launched from the web app and completed by a worker.
+- Operations notes for auth, secrets, monitoring, and rollback.
+
+### Changed
+
+- Hardened the integrated path from milestones 06-09 without introducing new architectural changes.
+- Kept the deployment model simple enough for local development to remain practical.
+
+## Milestone 09 - Model-Backed Runtime Events and Operator UI
+
+### Added
+
+- Runtime event emission for real model-backed execution including model start, completion, usage, latency, and provider request identifiers.
+- Launcher and run detail UI updates for structured workflow configuration.
+- Error handling and messaging aligned with real provider failures, configuration errors, and timeout behavior.
+- End-to-end tests covering web submission through worker completion.
+
+### Changed
+
+- Preserved the existing operator experience while switching from demo execution to real model-backed runs.
+
+## Milestone 08 - Web Server Proxy and Session Boundary
+
+### Added
+
+- Next.js server routes that proxy run creation, listing, detail fetches, cancellation, and event streaming to the FastAPI service.
+- Client API helpers that call same-origin routes.
+- Coverage for authenticated proxy calls and SSE forwarding.
+
+### Changed
+
+- Moved API credentials to the server side so the browser no longer needs a public operator token.
+- Updated the client-side data layer to call same-origin web routes instead of the backend directly.
+
+### Removed
+
+- Browser-exposed token requirement for normal operator usage.
+
+## Milestone 07 - Run Contracts and Generated Types
+
+### Added
+
+- Explicit workflow configuration object in the shared contracts.
+- Regenerated TypeScript types from the Python source of truth.
+- Test coverage for defaulting, validation, and backward compatibility.
+
+### Changed
+
+- Replaced free-form `metadata` usage with structured workflow configuration for real execution.
+
+## Milestone 06 - Agent Core Workflow Migration
+
+### Added
+
+- Shared workflow modules in `packages/agent-core` with registry-based execution.
+- Thin CLI compatibility layer for local terminal usage.
+- Tests covering workflow lookup, configuration errors, and worker execution.
+
+### Changed
+
+- Extracted reusable Anthropic-compatible client setup and LangGraph builder from the prototype CLI into the shared runtime.
+- Worker now dispatches by workflow name instead of using a single hardcoded graph.
 
 ## Milestone 05 - Hardening and Release
 
