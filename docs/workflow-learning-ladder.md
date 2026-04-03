@@ -12,9 +12,9 @@ Each workflow in the sequence introduces exactly one new concept on top of the p
 | 3 | `demo.tool-single` | Planned | Single tool execution |
 | 4 | `demo.tool-select` | Planned | Choosing among multiple tools |
 | 5 | `demo.react.once` | Planned | One-shot reason then act |
-| 6 | `demo.react` | Implemented (to refine) | Looping reason-act cycle |
+| 6 | `demo.react` | Implemented | Looping reason-act cycle |
 | 7 | `anthropic.respond` | Implemented | Provider-backed response |
-| 8 | `anthropic.react` (capstone) | Optional | Model-driven tool use |
+| 8 | `anthropic.react` (capstone) | Implemented | Model-driven tool use |
 
 ## Teaching Notes
 
@@ -61,11 +61,15 @@ immediately -- no iteration.
 
 ### 6. `demo.react` -- Looping Reason-Act Cycle
 
-Extends the one-shot pattern into a loop: reason, act, observe, repeat. The
-graph cycles through the reason and use_tool nodes until no further tool call
-is needed, then responds.
+Extends the one-shot pattern from `demo.react.once` into a loop: reason, act,
+observe the result, then reason again. After observing a tool result, the agent
+incorporates that observation into its next reasoning pass before responding.
+The graph cycles through the reason and use_tool nodes until no further tool
+call is needed, then responds.
 
 **What you learn:** *iteration inside a workflow graph* -- the core ReAct loop.
+Unlike `demo.react.once`, this workflow can use multiple tools in sequence by
+looping back through reasoning after each tool result.
 
 ### 7. `anthropic.respond` -- Provider-backed Response
 

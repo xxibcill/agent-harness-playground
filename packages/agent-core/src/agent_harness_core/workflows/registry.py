@@ -7,6 +7,7 @@ from typing import Callable
 from agent_harness_contracts import RunRecord
 
 from agent_harness_core.workflows.anthropic import build_anthropic_workflow
+from agent_harness_core.workflows.anthropic_react import build_anthropic_react_workflow
 from agent_harness_core.workflows.demo_echo import create_demo_echo_workflow
 from agent_harness_core.workflows.demo_react_once import create_demo_react_once_workflow
 from agent_harness_core.workflows.demo_route import create_demo_route_workflow
@@ -49,5 +50,6 @@ def build_default_workflow_registry() -> WorkflowRegistry:
             "demo.tool.select": create_demo_tool_select_workflow(),
             "demo.tool.single": create_demo_tool_single_workflow(),
             "anthropic.respond": build_anthropic_workflow,
+            "anthropic.react": build_anthropic_react_workflow,
         }
     )
