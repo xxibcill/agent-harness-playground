@@ -47,45 +47,51 @@ const initialLauncherState: LauncherState = {
 const workflowOptions = [
   {
     value: "demo.echo",
-    title: "Echo",
+    title: "Direct Response",
     badge: "Step 1",
-    description: "Verify core infrastructure: create, queue, execute, stream.",
+    description: "Simplest workflow: normalize input and echo it back.",
   },
   {
     value: "demo.route",
-    title: "Routing",
+    title: "Branching",
     badge: "Step 2",
-    description: "Deterministic branching: classify input and route to response.",
-  },
-  {
-    value: "demo.react.once",
-    title: "ReAct Once",
-    badge: "Step 3",
-    description: "Single reason-act cycle: plan, use one tool, respond.",
-  },
-  {
-    value: "demo.react",
-    title: "ReAct Loop",
-    badge: "Step 4",
-    description: "Iterative reasoning: plan, use tools, observe, repeat.",
+    description: "Conditional routing: classify input and return matching response.",
   },
   {
     value: "demo.tool.single",
     title: "Single Tool",
-    badge: "Step 5",
-    description: "Call one tool with input from user prompt.",
+    badge: "Step 3",
+    description: "Call one tool: learn how tool nodes integrate into the graph.",
   },
   {
     value: "demo.tool.select",
     title: "Tool Selection",
+    badge: "Step 4",
+    description: "Choose from multiple tools: inspect input to pick the right one.",
+  },
+  {
+    value: "demo.react.once",
+    title: "Reason-Act Once",
+    badge: "Step 5",
+    description: "One-shot pattern: plan, use one tool, then respond.",
+  },
+  {
+    value: "demo.react",
+    title: "ReAct Loop",
     badge: "Step 6",
-    description: "Dynamic tool selection based on input analysis.",
+    description: "Iterative loop: reason, act, observe, repeat.",
   },
   {
     value: "anthropic.respond",
     title: "Provider API",
     badge: "Step 7",
-    description: "Use external model API with configurable parameters.",
+    description: "External model: integrate a real LLM as the reasoning engine.",
+  },
+  {
+    value: "anthropic.react",
+    title: "Model Tool Use",
+    badge: "Capstone",
+    description: "Full agent: combine ReAct loop with model-driven tool selection.",
   },
 ] as const;
 
@@ -188,7 +194,9 @@ export function DashboardPage() {
         ? "Looping ReAct workflow that can plan, use tools, observe results, and iterate multiple times before answering."
         : launcher.workflow === "demo.react.once"
           ? "One-shot ReAct: single reason-act cycle. Plans, uses one tool, then responds."
-          : "Demo workflow that echoes input. Useful for testing without API keys.";
+          : launcher.workflow === "anthropic.react"
+            ? "Capstone workflow: model decides which tools to call and when to stop iterating."
+            : "Demo workflow that echoes input. Useful for testing without API keys.";
   const consoleGuidance = buildConsoleGuidance(summary, latestRun, refreshError);
 
   return (
