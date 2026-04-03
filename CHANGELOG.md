@@ -6,23 +6,24 @@ This changelog was initialized from the milestone documents in [`tasks/`](/Users
 
 ## Unreleased
 
-### Planned
+### Added
 
 - Educational workflow learning ladder: incremental demos teaching routing, tool use, tool selection, one-shot reasoning, and looping agent behavior.
 - Deterministic demo workflows: `demo.route`, `demo.tool.single`, `demo.tool.select`, `demo.react.once`.
-- Refined `demo.react` documentation to clearly present looping agent behavior.
 - Dashboard workflow catalog showing the learning progression in the operator UI.
 - README workflow lessons section with recommended run order and example prompts.
 - Automated tests locking down the educational workflow progression.
 - Optional Anthropic React capstone combining provider reasoning with tool use.
 
+### Changed
+
+- Refined `demo.react` documentation to clearly present looping agent behavior.
+- Retargeted root package metadata, docs, and tests to the current `agent-core` workflow surface.
+
 ### Removed
 
 - Deleted the legacy root CLI prototype and its console script entrypoints.
-
-### Changed
-
-- Retargeted root package metadata, docs, and tests to the current `agent-core` workflow surface.
+- Removed completed task files from `docs/tasks/`.
 
 ## Milestone 10 - Production Topology and Rollout
 

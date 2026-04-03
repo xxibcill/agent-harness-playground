@@ -25,6 +25,10 @@ from agent_harness_core.workflows import (
     build_anthropic_workflow,
 )
 from agent_harness_core.workflows.demo_echo import create_demo_echo_workflow, normalize_whitespace
+from agent_harness_core.workflows.demo_react_once import create_demo_react_once_workflow
+from agent_harness_core.workflows.demo_route import create_demo_route_workflow
+from agent_harness_core.workflows.demo_tool_select import create_demo_tool_select_workflow
+from agent_harness_core.workflows.demo_tool_single import create_demo_tool_single_workflow
 from agent_harness_observability import build_observability
 from agent_harness_worker.main import (
     WorkerConfig,
@@ -1094,3 +1098,190 @@ def test_event_sequence_ordering_and_consistency() -> None:
     event_types = [event.event_type for event in events]
     assert event_types[:2] == ["run.created", "run.queued"]
     assert event_types[-1] == "run.completed"
+
+
+def test_demo_route_workflow_routes_greetings_to_greeting_response() -> None:
+    store = InMemoryRunStore()
+    run = store.create_run(CreateRunRequest(workflow="demo.route", input="hello there"))
+
+    did_work = run_once(
+        store,
+        RuntimeExecutor(store),
+        WorkerConfig(poll_interval_seconds=0.0, lease_seconds=30, worker_id="worker-test"),
+    )
+
+    assert did_work is True
+    completed = store.get_run(run.run_id)
+    assert completed is not None
+    assert completed.status == RunStatus.COMPLETED
+    assert "Hello! I'm here to help" in completed.output["response"]
+
+
+def test_demo_route_workflow_routes_questions_to_question_response() -> None:
+    store = InMemoryRunStore()
+    run = store.create_run(CreateRunRequest(workflow="demo.route", input="what is this?"))
+
+    did_work = run_once(
+        store,
+        RuntimeExecutor(store),
+        WorkerConfig(poll_interval_seconds=0.0, lease_seconds=30, worker_id="worker-test"),
+    )
+
+    assert did_work is True
+    completed = store.get_run(run.run_id)
+    assert completed is not None
+    assert completed.status == RunStatus.COMPLETED
+    assert "interesting question" in completed.output["response"]
+
+
+def test_demo_route_workflow_routes_commands_to_command_response() -> None:
+    store = InMemoryRunStore()
+    run = store.create_run(CreateRunRequest(workflow="demo.route", input="run the task"))
+
+    did_work = run_once(
+        store,
+        RuntimeExecutor(store),
+        WorkerConfig(poll_interval_seconds=0.0, lease_seconds=30, worker_id="worker-test"),
+    )
+
+    assert did_work is True
+    completed = store.get_run(run.run_id)
+    assert completed is not None
+    assert completed.status == RunStatus.COMPLETED
+    assert "execute that command" in completed.output["response"]
+
+
+def test_demo_route_workflow_routes_plain_text_to_statement_response() -> None:
+    store = InMemoryRunStore()
+    run = store.create_run(CreateRunRequest(workflow="demo.route", input="the weather is nice"))
+
+    did_work = run_once(
+        store,
+        RuntimeExecutor(store),
+        WorkerConfig(poll_interval_seconds=0.0, lease_seconds=30, worker_id="worker-test"),
+    )
+
+    assert did_work is True
+    completed = store.get_run(run.run_id)
+    assert completed is not None
+    assert completed.status == RunStatus.COMPLETED
+    assert "I see. You said" in completed.output["response"]
+
+
+def test_demo_tool_single_workflow_calls_count_words_once() -> None:
+    store = InMemoryRunStore()
+    run = store.create_run(
+        CreateRunRequest(workflow="demo.tool.single", input="hello world from test")
+    )
+
+    did_work = run_once(
+        store,
+        RuntimeExecutor(store),
+        WorkerConfig(poll_interval_seconds=0.0, lease_seconds=30, worker_id="worker-test"),
+    )
+
+    assert did_work is True
+    completed = store.get_run(run.run_id)
+    assert completed is not None
+    assert completed.status == RunStatus.COMPLETED
+    assert "Word count result" in completed.output["response"]
+    assert "has 4 words" in completed.output["response"] or "4 words" in completed.output["response"]
+    assert completed.output.get("tool_calls", 0) == 1
+
+
+def test_demo_tool_select_workflow_selects_and_executes_calculator() -> None:
+    store = InMemoryRunStore()
+    run = store.create_run(
+        CreateRunRequest(workflow="demo.tool.select", input="calculate 5 + 3")
+    )
+
+    did_work = run_once(
+        store,
+        RuntimeExecutor(store),
+        WorkerConfig(poll_interval_seconds=0.0, lease_seconds=30, worker_id="worker-test"),
+    )
+
+    assert did_work is True
+    completed = store.get_run(run.run_id)
+    assert completed is not None
+    assert completed.status == RunStatus.COMPLETED
+    assert "calculator" in completed.output.get("response", "").lower()
+    assert completed.output.get("tool_calls", 0) == 1
+
+
+def test_demo_tool_select_workflow_rejects_unsupported_input() -> None:
+    store = InMemoryRunStore()
+    run = store.create_run(
+        CreateRunRequest(workflow="demo.tool.select", input="random unsupported text")
+    )
+
+    did_work = run_once(
+        store,
+        RuntimeExecutor(store),
+        WorkerConfig(poll_interval_seconds=0.0, lease_seconds=30, worker_id="worker-test"),
+    )
+
+    assert did_work is True
+    completed = store.get_run(run.run_id)
+    assert completed is not None
+    assert completed.status == RunStatus.COMPLETED
+    assert "No matching tool found" in completed.output["response"]
+
+
+def test_demo_react_once_workflow_uses_tool_once_and_responds() -> None:
+    store = InMemoryRunStore()
+    run = store.create_run(
+        CreateRunRequest(workflow="demo.react.once", input="calculate 10 + 5")
+    )
+
+    did_work = run_once(
+        store,
+        RuntimeExecutor(store),
+        WorkerConfig(poll_interval_seconds=0.0, lease_seconds=30, worker_id="worker-test"),
+    )
+
+    assert did_work is True
+    completed = store.get_run(run.run_id)
+    assert completed is not None
+    assert completed.status == RunStatus.COMPLETED
+    assert "calculator" in completed.output.get("response", "").lower()
+    assert completed.output.get("tool_calls", 0) == 1
+
+
+def test_demo_react_once_workflow_responds_directly_when_no_tool_needed() -> None:
+    store = InMemoryRunStore()
+    run = store.create_run(
+        CreateRunRequest(workflow="demo.react.once", input="just a plain message")
+    )
+
+    did_work = run_once(
+        store,
+        RuntimeExecutor(store),
+        WorkerConfig(poll_interval_seconds=0.0, lease_seconds=30, worker_id="worker-test"),
+    )
+
+    assert did_work is True
+    completed = store.get_run(run.run_id)
+    assert completed is not None
+    assert completed.status == RunStatus.COMPLETED
+    assert "did not need a tool" in completed.output["response"].lower() or "Echo:" in completed.output["response"]
+
+
+def test_simpler_workflow_does_not_loop_multiple_tools() -> None:
+    store = InMemoryRunStore()
+    run = store.create_run(CreateRunRequest(workflow="demo.echo", input="simple test"))
+
+    did_work = run_once(
+        store,
+        RuntimeExecutor(store),
+        WorkerConfig(poll_interval_seconds=0.0, lease_seconds=30, worker_id="worker-test"),
+    )
+
+    assert did_work is True
+    completed = store.get_run(run.run_id)
+    assert completed is not None
+    assert completed.status == RunStatus.COMPLETED
+
+    events = store.list_events(run.run_id)
+    tool_started_events = [e for e in events if e.event_type == "tool.started"]
+    assert len(tool_started_events) == 1

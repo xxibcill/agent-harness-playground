@@ -347,3 +347,119 @@ def test_calculate_average_tpm_uses_request_duration() -> None:
         output_tpm=120.0,
         total_tpm=200.0,
     )
+
+
+def test_classify_input_returns_greeting_for_hello() -> None:
+    from agent_harness_core.workflows.demo_route import classify_input
+
+    assert classify_input("hello") == "greeting"
+    assert classify_input("hi there") == "greeting"
+    assert classify_input("good morning") == "greeting"
+    assert classify_input("Hey, how are you?") == "greeting"
+
+
+def test_classify_input_returns_question_for_questions() -> None:
+    from agent_harness_core.workflows.demo_route import classify_input
+
+    assert classify_input("what is this?") == "question"
+    assert classify_input("how does it work?") == "question"
+    assert classify_input("why is the sky blue?") == "question"
+    assert classify_input("can you help me?") == "question"
+
+
+def test_classify_input_returns_command_for_verbs() -> None:
+    from agent_harness_core.workflows.demo_route import classify_input
+
+    assert classify_input("run this") == "command"
+    assert classify_input("please do it") == "command"
+    assert classify_input("start the process") == "command"
+    assert classify_input("make a coffee") == "command"
+
+
+def test_classify_input_returns_statement_for_other_text() -> None:
+    from agent_harness_core.workflows.demo_route import classify_input
+
+    assert classify_input("the weather is nice") == "statement"
+    assert classify_input("I like programming") == "statement"
+
+
+def test_choose_tool_returns_calculator_for_math_expressions() -> None:
+    from agent_harness_core.workflows.react import choose_tool
+
+    tool, input_val = choose_tool("calculate 2 + 3")
+    assert tool == "calculator"
+    assert input_val == "2 + 3"
+
+    tool, input_val = choose_tool("what is 10 * 5")
+    assert tool == "calculator"
+    assert input_val == "10 * 5"
+
+
+def test_choose_tool_returns_capital_for_country_queries() -> None:
+    from agent_harness_core.workflows.react import choose_tool
+
+    tool, input_val = choose_tool("capital of France")
+    assert tool == "lookup_capital"
+    assert input_val == "France"
+
+    tool, input_val = choose_tool("capital of Japan?")
+    assert tool == "lookup_capital"
+    assert input_val == "Japan"
+
+
+def test_choose_tool_returns_count_words_for_word_count_queries() -> None:
+    from agent_harness_core.workflows.react import choose_tool
+
+    tool, input_val = choose_tool("count words in hello world")
+    assert tool == "count_words"
+    assert input_val == "hello world"
+
+
+def test_choose_tool_returns_none_for_plain_text() -> None:
+    from agent_harness_core.workflows.react import choose_tool
+
+    tool, input_val = choose_tool("hello world")
+    assert tool is None
+    assert input_val is None
+
+
+def test_lookup_capital_returns_known_capitals() -> None:
+    from agent_harness_core.workflows.react import lookup_capital
+
+    assert lookup_capital("france") == "Paris"
+    assert lookup_capital("japan") == "Tokyo"
+    assert lookup_capital("Thailand") == "Bangkok"
+
+
+def test_lookup_capital_returns_unknown_for_unknown_countries() -> None:
+    from agent_harness_core.workflows.react import lookup_capital
+
+    result = lookup_capital("unknown country")
+    assert "Unknown capital" in result
+
+
+def test_count_words_returns_correct_count() -> None:
+    from agent_harness_core.workflows.react import count_words
+
+    assert count_words("hello world") == "2"
+    assert count_words("one two three four five") == "5"
+    assert count_words("   ") == "0"
+    assert count_words("") == "0"
+
+
+def test_calculate_expression_returns_math_results() -> None:
+    from agent_harness_core.workflows.react import calculate_expression
+
+    assert calculate_expression("2 + 3") == "5"
+    assert calculate_expression("10 - 4") == "6"
+    assert calculate_expression("3 * 4") == "12"
+    assert calculate_expression("10 / 2") == "5"
+    assert calculate_expression("2 + 3 * 4") == "14"
+
+
+def test_format_tool_response_different_formats() -> None:
+    from agent_harness_core.workflows.react import _format_tool_response
+
+    assert _format_tool_response("calculator", "2 + 3", "5") == "I used calculator on 2 + 3 and got 5."
+    assert _format_tool_response("lookup_capital", "france", "Paris") == "I used lookup_capital and found: france -> Paris."
+    assert _format_tool_response("count_words", "hello world", "2") == "I used count_words and found 2 words in: hello world"
