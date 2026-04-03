@@ -8,7 +8,9 @@ from agent_harness_contracts import RunRecord
 
 from agent_harness_core.workflows.anthropic import build_anthropic_workflow
 from agent_harness_core.workflows.demo_echo import create_demo_echo_workflow
+from agent_harness_core.workflows.demo_react_once import create_demo_react_once_workflow
 from agent_harness_core.workflows.demo_route import create_demo_route_workflow
+from agent_harness_core.workflows.demo_tool_select import create_demo_tool_select_workflow
 from agent_harness_core.workflows.demo_tool_single import create_demo_tool_single_workflow
 from agent_harness_core.workflows.react import create_demo_react_workflow
 from agent_harness_core.workflows.types import WorkflowDefinition
@@ -42,7 +44,9 @@ def build_default_workflow_registry() -> WorkflowRegistry:
         {
             "demo.echo": create_demo_echo_workflow(),
             "demo.react": create_demo_react_workflow(),
+            "demo.react.once": create_demo_react_once_workflow(),
             "demo.route": create_demo_route_workflow(),
+            "demo.tool.select": create_demo_tool_select_workflow(),
             "demo.tool.single": create_demo_tool_single_workflow(),
             "anthropic.respond": build_anthropic_workflow,
         }
